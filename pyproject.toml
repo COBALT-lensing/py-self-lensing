@@ -1,0 +1,31 @@
+[build-system]
+requires = ["cython", "hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[project]
+name = "selflensing"
+version = "0.0.1"
+authors = [
+  { name="Adam McMaster", email="a.mcmaster@soton.ac.uk" },
+]
+description = "A Python self-lensing model, for generating and fitting photometry and RV."
+readme = "README.md"
+requires-python = ">=3.8"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: BSD License",
+    "Operating System :: OS Independent",
+]
+dependencies=[
+    "cython", 
+    "astropy", 
+    "numpy", 
+    "PyNonUniformCircularSource @ git+https://github.com/ou-astrophysics/self-lensing-simulator.git#subdirectory=SuperWASPSLSim/python",
+]
+
+[project.urls]
+Homepage = "https://github.com/COBALT-lensing/py-self-lensing"
+Issues = "https://github.com/COBALT-lensing/py-self-lensing/issues"
