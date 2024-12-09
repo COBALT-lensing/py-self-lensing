@@ -1,5 +1,5 @@
 [build-system]
-requires = ["cython", "hatchling"]
+requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.metadata]
@@ -23,7 +23,8 @@ dependencies=[
     "cython", 
     "astropy", 
     "numpy", 
-    "PyNonUniformCircularSource @ git+https://github.com/ou-astrophysics/self-lensing-simulator.git#subdirectory=SuperWASPSLSim/python",
+    "mpmath",
+    "scipy",
 ]
 
 [project.urls]

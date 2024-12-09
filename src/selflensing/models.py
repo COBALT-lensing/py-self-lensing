@@ -183,5 +183,9 @@ class SelfLensingSystem(object):
     def v_acc(self, phase) -> units.m / units.s:
         return self.v(self.a_acc, phase)
 
+    @property
+    def v_avg(self) -> units.m / units.s:
+        return (2 * numpy.pi * self.a / self.porb).to(units.m / units.s)
+
     def v_comp(self, phase) -> units.m / units.s:
         return self.v(self.a_comp, phase)
