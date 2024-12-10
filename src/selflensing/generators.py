@@ -177,21 +177,21 @@ class SelfLensingLightcurveGenerator(FlatLightcurveGenerator):
 
     @property
     def flux_offset(self):
-        porb = self.lensing_system.porb
-        rE = self.lensing_system.rE
-
         projectedOffset = numpy.hypot(self.xlp, self.lensing_system.b)
         mags = numpy.array(list(self.magnifications(projectedOffset.value.tolist())))
         interpolant = interpolate.interp1d(
             self.xlp, mags, bounds_error=False, fill_value=1
         )
-        repeating_offsets = self.time_offsets % porb
+        repeating_offsets = self.time_offsets % self.lensing_system.porb
         repeating_offsets = numpy.where(
-            repeating_offsets < porb / 2,
+            repeating_offsets < self.lensing_system.porb / 2,
             repeating_offsets,
-            repeating_offsets - porb,
+            repeating_offsets - self.lensing_system.porb,
         )
-        binnedLensPlaneX = (repeating_offsets * self.lensing_system.v_avg) / rE
+        binnedLensPlaneX = (
+            repeating_offsets * self.lensing_system.v_avg
+        ) / self.lensing_system.rE
+
         return interpolant(binnedLensPlaneX.decompose().value)
 
     # The following implementation is based on the C++ version at:
@@ -199,7 +199,7 @@ class SelfLensingLightcurveGenerator(FlatLightcurveGenerator):
 
     def magnificationAtRadius(self):
         radius_unitless2 = self.radius_unitless**2
-        kernel = (2 / self.lradius_unitless) + (
+        kernel = (2 / self.radius_unitless) + (
             (1 + radius_unitless2) / radius_unitless2
         ) * (
             (numpy.pi / 2)
@@ -212,7 +212,9 @@ class SelfLensingLightcurveGenerator(FlatLightcurveGenerator):
 
     def uniform_magnification(self, sourcePlaneCoordinate):
         if abs(sourcePlaneCoordinate - self.radius_unitless) < 1e-5:
-            return self.magnificationAtRadius(self.radius_unitless)
+            return self.magnificationAtRadius()
+
+        radius_unitless2 = self.radius_unitless**2
 
         kernel1 = (sourcePlaneCoordinate - self.radius_unitless) ** 2
         kernel2 = numpy.sqrt(4.0 + kernel1)
@@ -225,30 +227,31 @@ class SelfLensingLightcurveGenerator(FlatLightcurveGenerator):
         )
 
         ellipticK = numpy.sqrt(4.0 * ellipticN) / kernel2
+        ellipticM = ellipticK**2
 
         firstTerm = ((sourcePlaneCoordinate + self.radius_unitless) * kernel2) / (
-            2.0 * (self.radius_unitless**2)
+            2.0 * (radius_unitless2)
         )
         secondTerm = (
             (sourcePlaneCoordinate - self.radius_unitless)
-            * (4.0 + (0.5 * (sourcePlaneCoordinate**2) - self.radius_unitless))
-            / (kernel2 * self.radius_unitless)
+            * (4.0 + (0.5 * (sourcePlaneCoordinate**2 - radius_unitless2)))
+            / (kernel2 * radius_unitless2)
         )
         thirdTerm = (
             2.0
             * kernel1
-            * (1.0 + self.radius_unitless)
+            * (1.0 + radius_unitless2)
             / (
-                (self.radius_unitless**2)
+                (radius_unitless2)
                 * (sourcePlaneCoordinate + self.radius_unitless)
                 * kernel2
             )
         )
 
         kernel3 = (
-            mpmath.ellipe(ellipticK) * firstTerm
-            - mpmath.ellipk(ellipticK) * secondTerm
-            + mpmath.ellippi(ellipticK, ellipticN) * thirdTerm
+            mpmath.ellipe(ellipticM) * firstTerm
+            - mpmath.ellipk(ellipticM) * secondTerm
+            + mpmath.ellippi(ellipticN, ellipticM) * thirdTerm
         )
 
         positiveSolutionReal = (kernel3 + numpy.pi) / (2.0 * numpy.pi)
@@ -274,6 +277,7 @@ class SelfLensingLightcurveGenerator(FlatLightcurveGenerator):
                 lambda r: r * self.radial_profile(r),
                 [0, self.radius_unitless],
                 method="gauss-legendre",
+                # maxdegree=15,
             )
         )
 
@@ -306,6 +310,7 @@ class SelfLensingLightcurveGenerator(FlatLightcurveGenerator):
                 ),
                 [0, self.radius_unitless],
                 method="gauss-legendre",
+                # maxdegree=15,
             )
         )
 
