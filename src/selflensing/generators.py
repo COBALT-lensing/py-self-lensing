@@ -2,13 +2,10 @@ import mpmath
 import numpy
 import random
 
-from astropy.time import TimeDelta, Time
 from astropy.timeseries import TimeSeries
 from astropy import units, constants
 
 from scipy import interpolate
-
-# from PyNonUniformCircularSource import PyNonUniformCircularSource
 
 
 class FlatLightcurveGenerator(object):
@@ -164,46 +161,20 @@ class EllipsoidalVariationsLightcurveGenerator(FlatLightcurveGenerator):
         )
 
 
-class SelfLensingLightcurveGenerator(FlatLightcurveGenerator):
-    xlp = numpy.linspace(-10, 10, 200)
-    LD_COEFF = 0.6
-
-    def __str__(self):
-        return "Generated Self Lensing Light Curve"
-
-    @property
-    def flux_array(self):
-        return super().flux_array * self.flux_offset
-
-    @property
-    def flux_offset(self):
-        projectedOffset = numpy.hypot(self.xlp, self.lensing_system.b)
-        mags = numpy.array(list(self.magnifications(projectedOffset.value.tolist())))
-        interpolant = interpolate.interp1d(
-            self.xlp, mags, bounds_error=False, fill_value=1
-        )
-        repeating_offsets = self.time_offsets % self.lensing_system.porb
-        repeating_offsets = numpy.where(
-            repeating_offsets < self.lensing_system.porb / 2,
-            repeating_offsets,
-            repeating_offsets - self.lensing_system.porb,
-        )
-        binnedLensPlaneX = (
-            repeating_offsets * self.lensing_system.v_avg
-        ) / self.lensing_system.rE
-
-        return interpolant(binnedLensPlaneX.decompose().value)
-
+class SelfLensingSimulator(object):
     # The following implementation is based on the C++ version at:
     # https://github.com/ou-astrophysics/self-lensing-simulator
 
+    def __init__(self, Rcomp, rE):
+        self.radius_unitless = Rcomp / rE
+        self.radius_unitless2 = self.radius_unitless**2
+
     def magnificationAtRadius(self):
-        radius_unitless2 = self.radius_unitless**2
         kernel = (2 / self.radius_unitless) + (
-            (1 + radius_unitless2) / radius_unitless2
+            (1 + self.radius_unitless2) / self.radius_unitless2
         ) * (
             (numpy.pi / 2)
-            + numpy.arcsin((radius_unitless2 - 1) / (radius_unitless2 + 1))
+            + numpy.arcsin((self.radius_unitless2 - 1) / (self.radius_unitless2 + 1))
         )
 
         total = kernel / numpy.pi
@@ -213,8 +184,6 @@ class SelfLensingLightcurveGenerator(FlatLightcurveGenerator):
     def uniform_magnification(self, sourcePlaneCoordinate):
         if abs(sourcePlaneCoordinate - self.radius_unitless) < 1e-5:
             return self.magnificationAtRadius()
-
-        radius_unitless2 = self.radius_unitless**2
 
         kernel1 = (sourcePlaneCoordinate - self.radius_unitless) ** 2
         kernel2 = numpy.sqrt(4.0 + kernel1)
@@ -230,19 +199,19 @@ class SelfLensingLightcurveGenerator(FlatLightcurveGenerator):
         ellipticM = ellipticK**2
 
         firstTerm = ((sourcePlaneCoordinate + self.radius_unitless) * kernel2) / (
-            2.0 * (radius_unitless2)
+            2.0 * (self.radius_unitless2)
         )
         secondTerm = (
             (sourcePlaneCoordinate - self.radius_unitless)
-            * (4.0 + (0.5 * (sourcePlaneCoordinate**2 - radius_unitless2)))
-            / (kernel2 * radius_unitless2)
+            * (4.0 + (0.5 * (sourcePlaneCoordinate**2 - self.radius_unitless2)))
+            / (kernel2 * self.radius_unitless2)
         )
         thirdTerm = (
             2.0
             * kernel1
-            * (1.0 + radius_unitless2)
+            * (1.0 + self.radius_unitless2)
             / (
-                (radius_unitless2)
+                (self.radius_unitless2)
                 * (sourcePlaneCoordinate + self.radius_unitless)
                 * kernel2
             )
@@ -259,22 +228,22 @@ class SelfLensingLightcurveGenerator(FlatLightcurveGenerator):
         return positiveSolutionReal + negativeSolutionReal
 
     def radial_profile(self, r):
+        LD_COEFF = 0.6
         radiusRatio = r / self.radius_unitless
         mu = numpy.sqrt(
             1.0 - (radiusRatio**2)
         )  # mu=cos(theta), theta=arcsin(radiusRatio)
-        return 1.0 - self.LD_COEFF * (1.0 - mu)
+        return 1.0 - LD_COEFF * (1.0 - mu)
 
-    @property
-    def radius_unitless(self):
-        return (self.lensing_system.Rcomp / self.lensing_system.rE).value
+    def _profile_f(self, r):
+        return r * self.radial_profile(r)
 
     def profile_integral(self):
         return (
             2
             * numpy.pi
             * mpmath.quad(
-                lambda r: r * self.radial_profile(r),
+                self._profile_f,
                 [0, self.radius_unitless],
                 method="gauss-legendre",
                 # maxdegree=15,
@@ -296,18 +265,21 @@ class SelfLensingLightcurveGenerator(FlatLightcurveGenerator):
 
         return mpmath.diff(f, radialCoordinate)
 
+    def _mag_profile_f(self, r):
+        return r * self.radial_profile(
+            r
+        ) * self._umag + 0.5 * r * self.magnification_derivative(
+            r, self._mag_profile_sourcePlaneCoordinate, umag=self._umag
+        )
+
     def magnification_profile_integral(self, sourcePlaneCoordinate):
-        umag = self.uniform_magnification(sourcePlaneCoordinate)
+        self._mag_profile_sourcePlaneCoordinate = sourcePlaneCoordinate
+        self._umag = self.uniform_magnification(sourcePlaneCoordinate)
         return (
             2
             * numpy.pi
             * mpmath.quad(
-                lambda r: (
-                    r * self.radial_profile(r) * umag
-                    + 0.5
-                    * r
-                    * self.magnification_derivative(r, sourcePlaneCoordinate, umag=umag)
-                ),
+                self._mag_profile_f,
                 [0, self.radius_unitless],
                 method="gauss-legendre",
                 # maxdegree=15,
@@ -321,8 +293,43 @@ class SelfLensingLightcurveGenerator(FlatLightcurveGenerator):
         )
 
     def magnifications(self, sourcePlaneCoordinates):
-        for sourcePlaneCoordinate in sourcePlaneCoordinates:
-            yield self.magnification(sourcePlaneCoordinate)
+        return [
+            self.magnification(sourcePlaneCoordinate)
+            for sourcePlaneCoordinate in sourcePlaneCoordinates
+        ]
+
+
+class SelfLensingLightcurveGenerator(FlatLightcurveGenerator):
+    def __str__(self):
+        return "Generated Self Lensing Light Curve"
+
+    @property
+    def flux_array(self):
+        return super().flux_array * self.flux_offset
+
+    @property
+    def flux_offset(self):
+        lensing_simulator = SelfLensingSimulator(
+            self.lensing_system.Rcomp.to(units.R_sun).value,
+            self.lensing_system.rE.to(units.R_sun).value,
+        )
+        xlp = numpy.linspace(-10, 10, 200)
+        projectedOffset = numpy.hypot(xlp, self.lensing_system.b)
+        mags = numpy.array(
+            lensing_simulator.magnifications(projectedOffset.value.tolist())
+        )
+        interpolant = interpolate.interp1d(xlp, mags, bounds_error=False, fill_value=1)
+        repeating_offsets = self.time_offsets % self.lensing_system.porb
+        repeating_offsets = numpy.where(
+            repeating_offsets < self.lensing_system.porb / 2,
+            repeating_offsets,
+            repeating_offsets - self.lensing_system.porb,
+        )
+        binnedLensPlaneX = (
+            repeating_offsets * self.lensing_system.v_avg
+        ) / self.lensing_system.rE
+
+        return interpolant(binnedLensPlaneX.decompose().value)
 
 
 class CombinedLightcurveGenerator(FlatLightcurveGenerator):

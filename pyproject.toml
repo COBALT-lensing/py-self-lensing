@@ -24,7 +24,7 @@ dependencies=[
     "astropy", 
     "numpy", 
     "mpmath",
-    "scipy",
+    "gmpy2",
 ]
 
 [project.urls]
