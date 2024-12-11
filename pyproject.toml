@@ -25,6 +25,7 @@ dependencies=[
     "numpy", 
     "mpmath",
     "gmpy2",
+    "scipy",
 ]
 
 [project.urls]
