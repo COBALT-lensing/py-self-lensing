@@ -49,35 +49,41 @@ def rv_chi2(
     maximum_period,
 ):
     a, Macc, e, periapsis_phase = params
-    cls = SelfLensingSystem
 
-    if a < cls.fit_limits["a"][0] or a > cls.fit_limits["a"][1]:
-        return -numpy.inf
-
-    # if b < cls.fit_limits["b"][0] or b > cls.fit_limits["b"][1]:
-    #     return -numpy.inf
-
-    if Macc < cls.fit_limits["Macc"][0] or Macc > cls.fit_limits["Macc"][1]:
+    if (
+        a < SelfLensingSystem.fit_limits["a"][0]
+        or a > SelfLensingSystem.fit_limits["a"][1]
+    ):
         return -numpy.inf
 
     if (
-        periapsis_phase < cls.fit_limits["periapsis_phase"][0]
-        or periapsis_phase > cls.fit_limits["periapsis_phase"][1]
+        Macc < SelfLensingSystem.fit_limits["Macc"][0]
+        or Macc > SelfLensingSystem.fit_limits["Macc"][1]
+    ):
+        return -numpy.inf
+
+    if (
+        periapsis_phase < SelfLensingSystem.fit_limits["periapsis_phase"][0]
+        or periapsis_phase > SelfLensingSystem.fit_limits["periapsis_phase"][1]
     ):
         return -numpy.inf
 
     # e = 1 is parabolic
-    if e < cls.fit_limits["e"][0] or e >= cls.fit_limits["e"][1]:
+    if (
+        e < SelfLensingSystem.fit_limits["e"][0]
+        or e >= SelfLensingSystem.fit_limits["e"][1]
+    ):
         return -numpy.inf
 
-    model_sls = cls(
-        a=a * cls.param_units["a"],
-        b=0 * cls.param_units["b"],
-        Macc=Macc * cls.param_units["Macc"],
+    model_sls = SelfLensingSystem(
+        a=a * SelfLensingSystem.param_units["a"],
+        b=0 * SelfLensingSystem.param_units["b"],
+        Macc=Macc * SelfLensingSystem.param_units["Macc"],
         Mcomp=Mcomp,
         Rcomp=Rcomp,
-        e=e * cls.param_units["e"],
-        periapsis_phase=periapsis_phase * cls.param_units["periapsis_phase"],
+        e=e * SelfLensingSystem.param_units["e"],
+        periapsis_phase=periapsis_phase
+        * SelfLensingSystem.param_units["periapsis_phase"],
     )
 
     rv_gen = RVGenerator(model_sls, peak_time)
@@ -102,7 +108,6 @@ def rv_chi2(
 
 @units.quantity_input
 def self_lensing_system_from_rv_fit(
-    cls,
     observed_rv,
     observed_rv_err,
     times,
@@ -119,11 +124,10 @@ def self_lensing_system_from_rv_fit(
             *[
                 numpy.random.uniform(bounds[0], bounds[1], nwalkers)
                 for bounds in (
-                    cls.fit_limits["a"],
-                    # cls.fit_limits["b"],
-                    cls.fit_limits["Macc"],
-                    cls.fit_limits["e"],
-                    cls.fit_limits["periapsis_phase"],
+                    SelfLensingSystem.fit_limits["a"],
+                    SelfLensingSystem.fit_limits["Macc"],
+                    SelfLensingSystem.fit_limits["e"],
+                    SelfLensingSystem.fit_limits["periapsis_phase"],
                 )
             ]
         )
@@ -176,15 +180,16 @@ def self_lensing_system_from_rv_fit(
     out_a, out_Macc, out_e, out_periapsis_phase = res
 
     return (
-        cls(
-            a=out_a * cls.param_units["a"],
-            b=0 * cls.param_units["b"],
-            Macc=out_Macc * cls.param_units["Macc"],
+        SelfLensingSystem(
+            a=out_a * SelfLensingSystem.param_units["a"],
+            b=0 * SelfLensingSystem.param_units["b"],
+            Macc=out_Macc * SelfLensingSystem.param_units["Macc"],
             Rcomp=Rcomp,
             Mcomp=Mcomp,
             Teff=Teff,
-            e=out_e * cls.param_units["e"],
-            periapsis_phase=out_periapsis_phase * cls.param_units["periapsis_phase"],
+            e=out_e * SelfLensingSystem.param_units["e"],
+            periapsis_phase=out_periapsis_phase
+            * SelfLensingSystem.param_units["periapsis_phase"],
         ),
         sampler,
     )
