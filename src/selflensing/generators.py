@@ -333,7 +333,7 @@ class SelfLensingLightcurveGenerator(FlatLightcurveGenerator):
         return interpolant(binnedLensPlaneX.decompose().value)
 
 
-class CombinedLightcurveGenerator(FlatLightcurveGenerator):
+class LightcurveGenerator(FlatLightcurveGenerator):
     """
     As defined in Nicholas M. Sorabella et al., ‘Modeling Long-Term Variability in
     Stellar-Compact Object Binary Systems for Mass Determinations’, The Astrophysical
