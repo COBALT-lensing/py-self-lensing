@@ -39,10 +39,6 @@ peak_time = Time("2025-06-01")
 
 lcg = LightcurveGenerator(sls, start_time=start_time, end_time=end_time, peak_time=peak_time)
 rvg = RVGenerator(sls, start_time=start_time, end_time=end_time, peak_time=peak_time)
-
-print(lcg.flux_array)
-
-print(rvg.rv)
 ```
 
 ```python
