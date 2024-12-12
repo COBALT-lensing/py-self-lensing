@@ -50,29 +50,20 @@ def rv_chi2(
 ):
     a, Macc, e, periapsis_phase = params
 
-    if (
-        a < SelfLensingSystem.fit_limits["a"][0]
-        or a > SelfLensingSystem.fit_limits["a"][1]
-    ):
+    if a < FIT_LIMITS["a"][0] or a > FIT_LIMITS["a"][1]:
+        return -numpy.inf
+
+    if Macc < FIT_LIMITS["Macc"][0] or Macc > FIT_LIMITS["Macc"][1]:
         return -numpy.inf
 
     if (
-        Macc < SelfLensingSystem.fit_limits["Macc"][0]
-        or Macc > SelfLensingSystem.fit_limits["Macc"][1]
-    ):
-        return -numpy.inf
-
-    if (
-        periapsis_phase < SelfLensingSystem.fit_limits["periapsis_phase"][0]
-        or periapsis_phase > SelfLensingSystem.fit_limits["periapsis_phase"][1]
+        periapsis_phase < FIT_LIMITS["periapsis_phase"][0]
+        or periapsis_phase > FIT_LIMITS["periapsis_phase"][1]
     ):
         return -numpy.inf
 
     # e = 1 is parabolic
-    if (
-        e < SelfLensingSystem.fit_limits["e"][0]
-        or e >= SelfLensingSystem.fit_limits["e"][1]
-    ):
+    if e < FIT_LIMITS["e"][0] or e >= FIT_LIMITS["e"][1]:
         return -numpy.inf
 
     model_sls = SelfLensingSystem(
@@ -124,10 +115,10 @@ def self_lensing_system_from_rv_fit(
             *[
                 numpy.random.uniform(bounds[0], bounds[1], nwalkers)
                 for bounds in (
-                    SelfLensingSystem.fit_limits["a"],
-                    SelfLensingSystem.fit_limits["Macc"],
-                    SelfLensingSystem.fit_limits["e"],
-                    SelfLensingSystem.fit_limits["periapsis_phase"],
+                    FIT_LIMITS["a"],
+                    FIT_LIMITS["Macc"],
+                    FIT_LIMITS["e"],
+                    FIT_LIMITS["periapsis_phase"],
                 )
             ]
         )
