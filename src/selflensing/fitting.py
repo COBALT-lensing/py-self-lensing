@@ -3,7 +3,8 @@ import numpy
 
 from astropy import units
 
-from selflensing.models import SelfLensingSystem, LensingEvent
+from selflensing.models import SelfLensingSystem
+from selflensing.generators import RVGenerator
 
 
 FIT_INIT = {
@@ -79,8 +80,8 @@ def rv_chi2(
         periapsis_phase=periapsis_phase * cls.param_units["periapsis_phase"],
     )
 
-    model_lensing_event = LensingEvent(model_sls, peak_time)
-    model_rv = model_lensing_event.rv(times, noise=None)
+    rv_gen = RVGenerator(model_sls, peak_time)
+    model_rv = rv_gen.rv(times, noise=None)
 
     rv_chi2 = -numpy.sum(
         (observed_rv.value - model_rv.value) ** 2

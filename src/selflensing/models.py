@@ -1,48 +1,6 @@
 import numpy
 
 from astropy import units, constants
-from astropy.time import Time
-
-
-class LensingEvent(object):
-    DEFAULT_NOISE_GENERATOR = None
-    DEFAULT_TIME_STEP = 1 * units.day
-
-    def __init__(
-        self,
-        lensing_system,
-        peak_time,
-    ):
-        self.lensing_system = lensing_system
-        self.peak_time = peak_time
-
-    def rv(self, times, noise=DEFAULT_NOISE_GENERATOR):
-        time_offsets = (times - self.peak_time).to(units.day)
-        phases = self.lensing_system.time_to_phase(time_offsets)
-        rv = self.lensing_system.rv(phases)
-        if noise is not None:
-            rv = noise.add_rv_noise(rv)
-        return rv
-
-    def rv_range(
-        self, start, end, step=DEFAULT_TIME_STEP, noise=DEFAULT_NOISE_GENERATOR
-    ):
-        """
-        Generate predicted RV values for the event for the given time range.
-
-        - start: The start time of the range.
-        - end: the end time of the range.
-        - step: The step size of the range (i.e. time in days between samples). (Default: 1)
-        - noise: distribution from which to add noise. Valid value are poisson or None.
-        """
-        return self.rv(self.time_range(start, end, step=step), noise=noise)
-
-    def time_range(self, start, end, step=DEFAULT_TIME_STEP, repeats=1):
-        times = []
-        for time in numpy.arange(start, end, step=step):
-            for i in range(repeats):
-                times.append(time)
-        return Time(times)
 
 
 class SelfLensingSystem(object):
