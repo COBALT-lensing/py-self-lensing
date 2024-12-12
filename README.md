@@ -1,6 +1,6 @@
 # py-self-lensing
 
-A Python module for generating and fitting light curves and RV time series for self-lensing binaries.
+A Python module for generating and fitting light curves and radial velocity time series for self-lensing binaries. Includes three effects in light curves: self-lensing, Doppler boosting, and ellipsoidal variations. Includes eccentricity in RV, but not in light curves (yet).
 
 ## Installing
 
