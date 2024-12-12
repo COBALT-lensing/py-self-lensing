@@ -77,18 +77,6 @@ class SelfLensingSystem(object):
             units.R_sun
         )
 
-    def rv(self, phase):
-        """
-        Radial velocity. Applies phase angle to orbital velocity.
-        """
-        return self.v_comp(phase) * numpy.sin(phase) * self.sin_i
-
-    def rv_deriv(self, phase):
-        """
-        Derivative of radial velocity.
-        """
-        return self.v_comp(phase) * numpy.cos(phase) * self.sin_i
-
     @property
     def sin_i(self):
         """

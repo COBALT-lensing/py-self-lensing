@@ -9,41 +9,47 @@ from astropy import units, constants
 from scipy import interpolate
 
 
-class FlatLightcurveGenerator(object):
+class GeneratorBase(object):
+    DEFAULT_BINS = 100
+
     def __init__(
         self,
         lensing_system=None,
         times=None,
-        time_start=None,
-        time_end=None,
+        start_time=None,
+        end_time=None,
         peak_time=None,
-        bins=100,
-        data_path=None,
-        timeseries=None,
-        baseline=1.0,
+        bins=DEFAULT_BINS,
     ):
-        if data_path is not None or timeseries is not None:
-            return super().__init__(data_path=data_path, timeseries=timeseries)
-
-        self.__set_times(times, time_start, time_end, bins)
+        self.__set_times(times, start_time, end_time, bins)
         if peak_time is None:
             peak_time = random.choice(list(self.times))
         self.peak_time = peak_time
         self.lensing_system = lensing_system
-        self.baseline = baseline
 
-    def __set_times(self, times, time_start, time_end, bins):
+    def __set_times(self, times, start_time, end_time, bins):
         if times is not None:
             self.times = times
         else:
-            if None in (time_start, time_end, bins):
+            if None in (start_time, end_time, bins):
                 raise TypeError(
-                    "Must initialise with either times or (time_start, time_end, bins)"
+                    "Must initialise with either times or (start_time, end_time, bins)"
                 )
-            self.time_start = time_start
-            self.time_end = time_end
+            self.start_time = start_time
+            self.end_time = end_time
             self.bins = bins
-            self.times = numpy.linspace(self.time_start, self.time_end, num=self.bins)
+            self.times = numpy.linspace(self.start_time, self.end_time, num=self.bins)
+
+
+class FlatLightcurveGenerator(GeneratorBase):
+    def __init__(
+        self,
+        *args,
+        baseline=1.0,
+        **kwargs,
+    ):
+        super().__init__(*args, **kwargs)
+        self.baseline = baseline
 
     def __str__(self):
         return "Generated Flat Light Curve"
@@ -113,8 +119,10 @@ class DopplerBoostingLightcurveGenerator(FlatLightcurveGenerator):
 
     @property
     def flux_array(self):
-        phases = self.lensing_system.time_to_phase(self.time_offsets)
-        rv = self.lensing_system.rv(phases)
+        rvg = RVGenerator(
+            self.lensing_system, times=self.times, peak_time=self.peak_time
+        )
+        rv = rvg.rv
         return (
             super().flux_array
             * ((3 - self.alpha) * (rv / constants.c) * self.lensing_system.sin_i).value
@@ -421,42 +429,28 @@ class LightcurveGenerator(FlatLightcurveGenerator):
         ) * super().flux_array
 
 
-class RVGenerator(object):
-    DEFAULT_NOISE_GENERATOR = None
-    DEFAULT_TIME_STEP = 1 * units.day
+class RVGenerator(GeneratorBase):
+    def phases(self):
+        time_offsets = (self.times - self.peak_time).to(units.day)
+        return self.lensing_system.time_to_phase(time_offsets)
 
-    def __init__(
-        self,
-        lensing_system,
-        peak_time,
-    ):
-        self.lensing_system = lensing_system
-        self.peak_time = peak_time
+    @property
+    def rv(self):
+        phases = self.phases()
+        return (
+            self.lensing_system.v_comp(phases)
+            * numpy.sin(phases)
+            * self.lensing_system.sin_i
+        )
 
-    def rv(self, times, noise=DEFAULT_NOISE_GENERATOR):
-        time_offsets = (times - self.peak_time).to(units.day)
-        phases = self.lensing_system.time_to_phase(time_offsets)
-        rv = self.lensing_system.rv(phases)
-        if noise is not None:
-            rv = noise.add_rv_noise(rv)
-        return rv
-
-    def rv_range(
-        self, start, end, step=DEFAULT_TIME_STEP, noise=DEFAULT_NOISE_GENERATOR
-    ):
+    @property
+    def rv_deriv(self):
         """
-        Generate predicted RV values for the event for the given time range.
-
-        - start: The start time of the range.
-        - end: the end time of the range.
-        - step: The step size of the range (i.e. time in days between samples). (Default: 1)
-        - noise: distribution from which to add noise. Valid value are poisson or None.
+        Derivative of radial velocity.
         """
-        return self.rv(self.time_range(start, end, step=step), noise=noise)
-
-    def time_range(self, start, end, step=DEFAULT_TIME_STEP, repeats=1):
-        times = []
-        for time in numpy.arange(start, end, step=step):
-            for i in range(repeats):
-                times.append(time)
-        return Time(times)
+        phases = self.phases()
+        return (
+            self.lensing_system.v_comp(phases)
+            * numpy.cos(phases)
+            * self.lensing_system.sin_i
+        )
