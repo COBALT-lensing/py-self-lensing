@@ -124,7 +124,7 @@ def self_lensing_system_from_rv_fit(
         )
     )
 
-    from lombscargle import get_top_period
+    from selflensing.lombscargle import get_top_period
 
     baseline = times[-1].jd - times[0].jd
 
