@@ -4,7 +4,7 @@ import numpy
 from astropy import units
 
 from selflensing.models import SelfLensingSystem
-from selflensing.generators import RVGenerator
+from selflensing.generators import RVGenerator, LightcurveGenerator
 
 
 FIT_INIT = {
@@ -36,7 +36,7 @@ def gauss_lnprior(x, mu, sigma=1):
     return gauss_norm - 0.5 * (x - mu) ** 2 / sigma**2
 
 
-def rv_chi2(
+def combined_chi2(
     params,
     Mcomp,
     Rcomp,
@@ -44,6 +44,8 @@ def rv_chi2(
     times,
     observed_rv,
     observed_rv_err,
+    observed_lc,
+    observed_lc_err,
     expected_period,
     minimum_period,
     maximum_period,
@@ -77,14 +79,6 @@ def rv_chi2(
         * SelfLensingSystem.param_units["periapsis_phase"],
     )
 
-    rv_gen = RVGenerator(model_sls, peak_time)
-    model_rv = rv_gen.rv(times, noise=None)
-
-    rv_chi2 = -numpy.sum(
-        (observed_rv.value - model_rv.value) ** 2
-        / observed_rv_err.to(units.m / units.s).value ** 2
-    ) / len(observed_rv)
-
     period_err = 0
     if expected_period is not None:
         period_err = gauss_lnprior(model_sls.porb.value, expected_period)
@@ -94,19 +88,48 @@ def rv_chi2(
     if maximum_period is not None and model_sls.porb.value > maximum_period:
         return -numpy.inf
 
-    return rv_chi2 + period_err
+    if observed_rv is None:
+        rv_chi2 = 0
+    else:
+        rv_gen = RVGenerator(
+            model_sls, start_time=times[0], end_time=times[-1], peak_time=peak_time
+        )
+        rv_chi2 = chi2(
+            observed_rv.value,
+            observed_rv_err.to(units.m / units.s).value,
+            rv_gen.rv.value,
+        )
+
+    if observed_lc is None:
+        lc_chi2 = 0
+    else:
+        lc_gen = LightcurveGenerator(
+            model_sls, start_time=times[0], end_time=times[-1], peak_time=peak_time
+        )
+        lc_chi2 = chi2(observed_lc.value, observed_lc_err.value, lc_gen.flux_array)
+
+    return rv_chi2 + lc_chi2 + period_err
+
+
+def chi2(obs, obs_err, model):
+    return -numpy.sum((obs - model) ** 2 / obs_err**2) / len(obs)
 
 
 @units.quantity_input
-def self_lensing_system_from_rv_fit(
-    observed_rv,
-    observed_rv_err,
+def self_lensing_system_from_fit(
     times,
     Mcomp: units.kg,
     Rcomp: units.m,
     peak_time,
+    observed_rv=None,
+    observed_rv_err=None,
+    observed_lc=None,
+    observed_lc_err=None,
     Teff: units.K = SelfLensingSystem.DEFAULT_TEFF,
 ):
+    if observed_rv is None and observed_lc is None:
+        raise RuntimeError("You must provide at least one of observed_rv, observed_ts")
+
     nwalkers = 100
     nsteps = 5000
 
@@ -142,7 +165,7 @@ def self_lensing_system_from_rv_fit(
         sampler = emcee.EnsembleSampler(
             nwalkers,
             len(p0[0]),
-            rv_chi2,
+            combined_chi2,
             args=(
                 Mcomp,
                 Rcomp,
@@ -150,6 +173,8 @@ def self_lensing_system_from_rv_fit(
                 times,
                 observed_rv,
                 observed_rv_err,
+                observed_lc,
+                observed_lc_err,
                 expected_period,
                 minimum_period,
                 maximum_period,
