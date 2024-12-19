@@ -126,12 +126,11 @@ def self_lensing_system_from_fit(
     observed_lc=None,
     observed_lc_err=None,
     Teff: units.K = SelfLensingSystem.DEFAULT_TEFF,
+    nwalkers=100,
+    nsteps=5000,
 ):
     if observed_rv is None and observed_lc is None:
         raise RuntimeError("You must provide at least one of observed_rv, observed_ts")
-
-    nwalkers = 100
-    nsteps = 5000
 
     p0 = list(
         zip(
