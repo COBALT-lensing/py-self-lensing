@@ -128,6 +128,7 @@ def self_lensing_system_from_fit(
     Teff: units.K = SelfLensingSystem.DEFAULT_TEFF,
     nwalkers=100,
     nsteps=5000,
+    burn=500,
 ):
     if observed_rv is None and observed_lc is None:
         raise RuntimeError("You must provide at least one of observed_rv, observed_ts")
@@ -189,7 +190,7 @@ def self_lensing_system_from_fit(
             nsteps,
             progress=True,
         )
-    flat_samples = sampler.get_chain(flat=True)
+    flat_samples = sampler.get_chain(flat=True, discard=burn)
     res = flat_samples[numpy.argmax(sampler.get_log_prob(flat=True))]
 
     out_a, out_Macc, out_e, out_periapsis_phase = res
