@@ -41,9 +41,10 @@ def combined_chi2(
     Mcomp,
     Rcomp,
     peak_time,
-    times,
+    rv_times,
     observed_rv,
     observed_rv_err,
+    lc_times,
     observed_lc,
     observed_lc_err,
     expected_period,
@@ -91,9 +92,7 @@ def combined_chi2(
     if observed_rv is None:
         rv_chi2 = 0
     else:
-        rv_gen = RVGenerator(
-            model_sls, start_time=times[0], end_time=times[-1], peak_time=peak_time
-        )
+        rv_gen = RVGenerator(model_sls, times=rv_times, peak_time=peak_time)
         rv_chi2 = chi2(
             observed_rv.value,
             observed_rv_err.to(units.m / units.s).value,
@@ -103,9 +102,7 @@ def combined_chi2(
     if observed_lc is None:
         lc_chi2 = 0
     else:
-        lc_gen = LightcurveGenerator(
-            model_sls, start_time=times[0], end_time=times[-1], peak_time=peak_time
-        )
+        lc_gen = LightcurveGenerator(model_sls, times=lc_times, peak_time=peak_time)
         lc_chi2 = chi2(observed_lc.value, observed_lc_err.value, lc_gen.flux_array)
 
     return rv_chi2 + lc_chi2 + period_err
@@ -117,12 +114,13 @@ def chi2(obs, obs_err, model):
 
 @units.quantity_input
 def self_lensing_system_from_fit(
-    times,
     Mcomp: units.kg,
     Rcomp: units.m,
     peak_time,
+    rv_times=None,
     observed_rv=None,
     observed_rv_err=None,
+    lc_times=None,
     observed_lc=None,
     observed_lc_err=None,
     Teff: units.K = SelfLensingSystem.DEFAULT_TEFF,
@@ -149,9 +147,9 @@ def self_lensing_system_from_fit(
 
     from selflensing.lombscargle import get_top_period
 
-    baseline = times[-1].jd - times[0].jd
+    baseline = lc_times[-1].jd - lc_times[0].jd
 
-    expected_period = get_top_period(observed_rv, times=times.jd)
+    expected_period = get_top_period(observed_lc, times=lc_times.jd)
     minimum_period = None
     maximum_period = None
     if expected_period > (0.9 * baseline):
@@ -170,9 +168,10 @@ def self_lensing_system_from_fit(
                 Mcomp,
                 Rcomp,
                 peak_time,
-                times,
+                rv_times,
                 observed_rv,
                 observed_rv_err,
+                lc_times,
                 observed_lc,
                 observed_lc_err,
                 expected_period,
@@ -191,7 +190,7 @@ def self_lensing_system_from_fit(
             progress=True,
         )
     flat_samples = sampler.get_chain(flat=True, discard=burn)
-    res = flat_samples[numpy.argmax(sampler.get_log_prob(flat=True))]
+    res = flat_samples[numpy.argmax(sampler.get_log_prob(flat=True, discard=burn))]
 
     out_a, out_Macc, out_e, out_periapsis_phase = res
 
