@@ -1,4 +1,3 @@
-import mpmath
 import numpy
 import random
 
@@ -6,7 +5,14 @@ from astropy.time import Time
 from astropy.timeseries import TimeSeries
 from astropy import units, constants
 
-from scipy import interpolate
+from scipy import interpolate, special
+
+
+def ellippi(n, m):
+    # https://stackoverflow.com/questions/77488171/complete-integral-of-the-third-kind-using-scipy-python-and-mathematica/77488531#77488531
+    return special.elliprf(0.0, 1.0 - m, 1.0) + (n / 3.0) * special.elliprj(
+        0.0, 1.0 - m, 1.0, 1.0 - n
+    )
 
 
 class GeneratorBase(object):
@@ -227,9 +233,9 @@ class SelfLensingSimulator(object):
         )
 
         kernel3 = (
-            mpmath.ellipe(ellipticM) * firstTerm
-            - mpmath.ellipk(ellipticM) * secondTerm
-            + mpmath.ellippi(ellipticN, ellipticM) * thirdTerm
+            special.ellipe(ellipticM) * firstTerm
+            - special.ellipk(ellipticM) * secondTerm
+            + ellippi(ellipticN, ellipticM) * thirdTerm
         )
 
         positiveSolutionReal = (kernel3 + numpy.pi) / (2.0 * numpy.pi)

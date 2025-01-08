@@ -22,7 +22,6 @@ classifiers = [
 dependencies=[
     "astropy", 
     "numpy", 
-    "mpmath",
     "gmpy2",
     "scipy",
 ]
