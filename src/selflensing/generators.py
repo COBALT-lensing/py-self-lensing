@@ -263,7 +263,7 @@ class SelfLensingSimulator(object):
                 self.radius_unitless,
                 # method="gauss-legendre",
                 # maxdegree=15,
-            )
+            )[0]
         )
 
     def magnification_derivative(
@@ -300,7 +300,7 @@ class SelfLensingSimulator(object):
                 self.radius_unitless,
                 # method="gauss-legendre",
                 # maxdegree=15,
-            )
+            )[0]
         )
 
     def magnification(self, sourcePlaneCoordinate):
