@@ -279,7 +279,7 @@ class SelfLensingSimulator(object):
                 return umag
             return self.uniform_magnification(sourcePlaneCoordinate)
 
-        return differentiate.derivative(f, radialCoordinate).df
+        return differentiate.derivative(f, radialCoordinate)
 
     def _mag_profile_f(self, r):
         return r * self.radial_profile(
