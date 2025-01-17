@@ -21,6 +21,7 @@ def ellippi(n, m):
 
 class GeneratorBase(object):
     DEFAULT_BINS = 100
+    units = units.dimensionless_unscaled
 
     def __init__(
         self,
@@ -81,11 +82,11 @@ class FlatLightcurveGenerator(GeneratorBase):
 
     @property
     def flux_array(self):
-        return numpy.full(len(self.times), self.baseline)
+        return numpy.full(len(self.times), self.baseline) * self.units
 
     @property
     def flux_err_array(self):
-        return numpy.full(len(self.times), numpy.nan)
+        return numpy.full(len(self.times), numpy.nan) * self.units
 
     @property
     def timeseries(self):
@@ -440,6 +441,8 @@ class LightcurveGenerator(FlatLightcurveGenerator):
 
 
 class RVGenerator(GeneratorBase):
+    units = units.m / units.s
+
     def phases(self):
         time_offsets = (self.times - self.peak_time).to(units.day)
         return self.lensing_system.time_to_phase(time_offsets)
@@ -451,7 +454,7 @@ class RVGenerator(GeneratorBase):
             self.lensing_system.v_comp(phases)
             * numpy.sin(phases)
             * self.lensing_system.sin_i
-        )
+        ).to(self.units)
 
     @property
     def rv_deriv(self):

@@ -47,9 +47,9 @@ def combined_chi2(
     lc_times,
     observed_lc,
     observed_lc_err,
-    expected_period,
-    minimum_period,
-    maximum_period,
+    detected_periods,
+    minimum_baseline_period,
+    maximum_baseline_period,
 ):
     a, Macc, e, periapsis_phase = params
 
@@ -81,12 +81,11 @@ def combined_chi2(
     )
 
     period_err = 0
-    if expected_period is not None:
-        period_err = gauss_lnprior(model_sls.porb.value, expected_period)
+    if model_sls.porb.value < minimum_baseline_period:
+        closest_period = detected_periods[numpy.argmin(numpy.abs(detected_periods - model_sls.porb.value))]
+        period_err = gauss_lnprior(model_sls.porb.value, closest_period)
 
-    if minimum_period is not None and model_sls.porb.value < minimum_period:
-        return -numpy.inf
-    if maximum_period is not None and model_sls.porb.value > maximum_period:
+    if model_sls.porb.value > maximum_baseline_period:
         return -numpy.inf
 
     if observed_rv is None:
@@ -103,7 +102,7 @@ def combined_chi2(
         lc_chi2 = 0
     else:
         lc_gen = LightcurveGenerator(model_sls, times=lc_times, peak_time=peak_time)
-        lc_chi2 = chi2(observed_lc.value, observed_lc_err.value, lc_gen.flux_array)
+        lc_chi2 = chi2(observed_lc.value, observed_lc_err.value, lc_gen.flux_array.value)
 
     return rv_chi2 + lc_chi2 + period_err
 
@@ -145,17 +144,14 @@ def self_lensing_system_from_fit(
         )
     )
 
-    from selflensing.lombscargle import get_top_period
+    from selflensing.lombscargle import get_periods
 
     baseline = lc_times[-1].jd - lc_times[0].jd
+    minimum_baseline_period = 0.9 * baseline
+    maximum_baseline_period = 2 * baseline
 
-    expected_period = get_top_period(observed_lc, times=lc_times.jd)
-    minimum_period = None
-    maximum_period = None
-    if expected_period > (0.9 * baseline):
-        expected_period = None
-        minimum_period = 0.9 * baseline
-        maximum_period = 2 * baseline
+    detected_periods = get_periods(observed_lc, times=lc_times.jd)
+    detected_periods = detected_periods[detected_periods < minimum_baseline_period]
 
     from multiprocessing import Pool
 
@@ -174,9 +170,9 @@ def self_lensing_system_from_fit(
                 lc_times,
                 observed_lc,
                 observed_lc_err,
-                expected_period,
-                minimum_period,
-                maximum_period,
+                detected_periods,
+                minimum_baseline_period,
+                maximum_baseline_period,
             ),
             pool=pool,
             moves=[

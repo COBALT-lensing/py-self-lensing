@@ -3,11 +3,14 @@ import numpy
 from astropy.timeseries import LombScargle
 
 
-def get_top_period(rv, times):
+
+def get_periods(lc, times):
     maximum_frequency = 0.5
     minimum_frequency = 1.0 / (times[-1] - times[0])
-    frequency, power = LombScargle(times, rv).autopower(
+    ls = LombScargle(times, lc)
+    frequency, power = ls.autopower(
         maximum_frequency=maximum_frequency, minimum_frequency=minimum_frequency
     )
-    period = 1 / frequency
-    return period[numpy.argmax(power)]
+
+    fal = ls.false_alarm_level(0.01)
+    return 1 / frequency[power > fal]
