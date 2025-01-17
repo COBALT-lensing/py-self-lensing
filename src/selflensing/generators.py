@@ -9,6 +9,9 @@ from astropy import units, constants
 from scipy import interpolate, special
 
 
+# We use scipy for elliptic integrals because it is faster than mpmath
+# but mpmath is faster than scipy for differentiation and integration
+
 def ellippi(n, m):
     # https://stackoverflow.com/questions/77488171/complete-integral-of-the-third-kind-using-scipy-python-and-mathematica/77488531#77488531
     return special.elliprf(0.0, 1.0 - m, 1.0) + (n / 3.0) * special.elliprj(
