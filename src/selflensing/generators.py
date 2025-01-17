@@ -5,7 +5,7 @@ from astropy.time import Time
 from astropy.timeseries import TimeSeries
 from astropy import units, constants
 
-from scipy import interpolate, special, integrate, differentiate
+from scipy import interpolate, special
 
 
 def ellippi(n, m):
@@ -257,11 +257,10 @@ class SelfLensingSimulator(object):
         return (
             2
             * numpy.pi
-            * integrate.quad(
+            * mpmath.quad(
                 self._profile_f,
-                0,
-                self.radius_unitless,
-                # method="gauss-legendre",
+                [0, self.radius_unitless],
+                method="gauss-legendre",
                 # maxdegree=15,
             )
         )
@@ -279,7 +278,7 @@ class SelfLensingSimulator(object):
                 return umag
             return self.uniform_magnification(sourcePlaneCoordinate)
 
-        return differentiate.derivative(f, radialCoordinate)
+        return mpmath.diff(f, radialCoordinate)
 
     def _mag_profile_f(self, r):
         return r * self.radial_profile(
@@ -294,11 +293,10 @@ class SelfLensingSimulator(object):
         return (
             2
             * numpy.pi
-            * integrate.quad(
+            * mpmath.quad(
                 self._mag_profile_f,
-                0,
-                self.radius_unitless,
-                # method="gauss-legendre",
+                [0, self.radius_unitless],
+                method="gauss-legendre",
                 # maxdegree=15,
             )
         )
