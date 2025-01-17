@@ -81,9 +81,12 @@ def combined_chi2(
     )
 
     period_err = 0
-    if model_sls.porb.value < minimum_baseline_period:
-        closest_period = detected_periods[numpy.argmin(numpy.abs(detected_periods - model_sls.porb.value))]
-        period_err = gauss_lnprior(model_sls.porb.value, closest_period)
+    if len(detected_periods) > 0:
+        if model_sls.porb.value < minimum_baseline_period:
+            closest_period = detected_periods[numpy.argmin(numpy.abs(detected_periods - model_sls.porb.value))]
+            period_err = gauss_lnprior(model_sls.porb.value, closest_period)
+        else:
+            return -numpy.inf
 
     if model_sls.porb.value > maximum_baseline_period:
         return -numpy.inf
