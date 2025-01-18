@@ -80,15 +80,16 @@ def combined_chi2(
         * SelfLensingSystem.param_units["periapsis_phase"],
     )
 
+    porb = model_sls.porb.value
+
     period_err = 0
     if len(detected_periods) > 0:
-        if model_sls.porb.value < minimum_baseline_period:
-            closest_period = detected_periods[numpy.argmin(numpy.abs(detected_periods - model_sls.porb.value))]
-            period_err = gauss_lnprior(model_sls.porb.value, closest_period)
-        else:
+        if porb > minimum_baseline_period:
             return -numpy.inf
+        closest_period = detected_periods[numpy.argmin(numpy.abs(detected_periods - porb))]
+        period_err = gauss_lnprior(porb, closest_period)            
 
-    if model_sls.porb.value > maximum_baseline_period:
+    if porb > maximum_baseline_period:
         return -numpy.inf
 
     if observed_rv is None:

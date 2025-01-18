@@ -276,14 +276,10 @@ class SelfLensingSimulator(object):
         if radialCoordinate < 0:
             return 0
 
-        def f(r):
-            if r < 0:
-                return 0
-            if umag is not None:
-                return umag
-            return self.uniform_magnification(sourcePlaneCoordinate)
+        if umag is None:
+            umag = self.uniform_magnification(sourcePlaneCoordinate)
 
-        return mpmath.diff(f, radialCoordinate)
+        return mpmath.diff(lambda r: 0 if r < 0 else umag, radialCoordinate)
 
     def _mag_profile_f(self, r):
         return r * self.radial_profile(
