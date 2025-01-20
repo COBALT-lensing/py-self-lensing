@@ -1,6 +1,16 @@
 import numpy
 
+from functools import cached_property
+
 from astropy import units, constants
+
+
+CONST_C2 = (constants.c**2).decompose().value
+CONST_4G = (4 * constants.G).decompose().value
+CONST_G = constants.G.decompose().value
+CONST_2PI = 2 * numpy.pi
+CONST_HALF_PI = 0.5 * numpy.pi
+CONST_R_SUN = (1 * units.R_sun).decompose().value
 
 
 class SelfLensingSystem(object):
@@ -30,24 +40,24 @@ class SelfLensingSystem(object):
         e: units.dimensionless_unscaled = DEFAULT_E,
         periapsis_phase: units.rad = DEFAULT_PERIAPSIS,
     ):
-        self.b = b
-        self.a = a.to(self.param_units["a"])
-        self.Macc = Macc.to(self.param_units["Macc"])
-        self.Rcomp = Rcomp.to(self.param_units["Rcomp"])
-        self.Mcomp = Mcomp.to(self.param_units["Mcomp"])
-        self.Teff = Teff.to(self.param_units["Teff"])
-        self.e = e
-        self.periapsis_phase = periapsis_phase.to(self.param_units["periapsis_phase"])
+        self.b = b.decompose().value
+        self.a = a.decompose().value
+        self.Macc = Macc.decompose().value
+        self.Rcomp = Rcomp.decompose().value
+        self.Mcomp = Mcomp.decompose().value
+        self.Teff = Teff.decompose().value
+        self.e = e.decompose().value
+        self.periapsis_phase = periapsis_phase.decompose().value
 
-    @property
+    @cached_property
     def a_acc(self):
         return self.a * self.Mcomp / self.Mtot
 
-    @property
+    @cached_property
     def a_comp(self):
         return self.a * self.Macc / self.Mtot
 
-    @property
+    @cached_property
     def b_max(self):
         """
         Maximum b where SL is possible as defined in Wiktorowicz, Grzegorz, Matthew Middleton,
@@ -58,26 +68,19 @@ class SelfLensingSystem(object):
         """
         return 1 + self.Rcomp / self.rE
 
-    @property
+    @cached_property
     def Mtot(self):
         return self.Macc + self.Mcomp
 
-    @property
-    @units.quantity_input
-    def porb(self) -> units.day:
-        return (
-            2
-            * numpy.pi
-            * numpy.sqrt(self.a**3 / (constants.G * self.Mtot)).to(units.day)
-        )
+    @cached_property
+    def porb(self):
+        return CONST_2PI * numpy.sqrt(self.a**3 / (CONST_G * self.Mtot))
 
-    @property
-    def rE(self) -> units.R_sun:
-        return numpy.sqrt((4 * constants.G * self.Macc * self.a) / constants.c**2).to(
-            units.R_sun
-        )
+    @cached_property
+    def rE(self):
+        return numpy.sqrt((CONST_4G * self.Macc * self.a) / CONST_C2) / CONST_R_SUN
 
-    @property
+    @cached_property
     def sin_i(self):
         """
         sin of orbital inclination
@@ -89,9 +92,9 @@ class SelfLensingSystem(object):
         psi = numpy.arcsin(
             (self.b * self.rE) / self.a
         )  # The angular inclination of the source
-        return numpy.sin((0.5 * numpy.pi) * units.rad - psi)
+        return numpy.sin(CONST_HALF_PI - psi)
 
-    @property
+    @cached_property
     def tau_eff(self):
         """
         Effective crossing time as defined in Wiktorowicz, Grzegorz, Matthew Middleton,
@@ -101,37 +104,35 @@ class SelfLensingSystem(object):
         https://doi.org/10.1093/mnras/stab2135.
         """
         return (
-            ((self.porb * (self.rE + self.Rcomp)) / (numpy.pi * self.a * self.sin_i))
-            * numpy.sqrt(1 - (self.b / self.b_max) ** 2)
-        ).to(units.day)
+            (self.porb * (self.rE + self.Rcomp)) / (numpy.pi * self.a * self.sin_i)
+        ) * numpy.sqrt(1 - (self.b / self.b_max) ** 2)
 
     @units.quantity_input
-    def time_to_phase(self, time: units.day) -> units.rad:
+    def time_to_phase(self, time: units.day):
         """
         Convert time offsets to angular orbital phases.
         """
-        time = time % self.porb
-        return (((time / self.porb).decompose() * 2 * numpy.pi)) * units.rad
+        time = time.decompose().value % self.porb
+        return (time / self.porb) * CONST_2PI
 
-    def v(self, a, phase) -> units.m / units.s:
+    def v(self, a, phase):
         """
         Orbital velocity.
         """
         r = (a * (1 - self.e**2)) / (
             1 + self.e * numpy.cos(phase - self.periapsis_phase)
         )
-        v = numpy.sqrt((constants.G * self.Mtot) * (2 / r - 1 / a))
-        return v.to(units.m / units.s)
+        return numpy.sqrt((CONST_G * self.Mtot) * (2 / r - 1 / a))
 
-    def v_tot(self, phase) -> units.m / units.s:
+    def v_tot(self, phase):
         return self.v(self.a, phase)
 
-    def v_acc(self, phase) -> units.m / units.s:
+    def v_acc(self, phase):
         return self.v(self.a_acc, phase)
 
-    @property
-    def v_avg(self) -> units.m / units.s:
-        return (2 * numpy.pi * self.a / self.porb).to(units.m / units.s)
+    @cached_property
+    def v_avg(self):
+        return CONST_2PI * self.a / self.porb
 
-    def v_comp(self, phase) -> units.m / units.s:
+    def v_comp(self, phase):
         return self.v(self.a_comp, phase)

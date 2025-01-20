@@ -2,15 +2,20 @@ import mpmath
 import numpy
 import random
 
-from astropy.time import Time
 from astropy.timeseries import TimeSeries
 from astropy import units, constants
 
 from scipy import interpolate, special
 
+CONST_R_SUN = (1 * units.R_sun).decompose().value
+CONST_H = constants.h.decompose().value
+CONST_K_B = constants.k_B.decompose().value
+CONST_C = constants.c.decompose().value
+
 
 # We use scipy for elliptic integrals because it is faster than mpmath
 # but mpmath is faster than scipy for differentiation and integration
+
 
 def ellippi(n, m):
     # https://stackoverflow.com/questions/77488171/complete-integral-of-the-third-kind-using-scipy-python-and-mathematica/77488531#77488531
@@ -108,7 +113,7 @@ class DopplerBoostingLightcurveGenerator(FlatLightcurveGenerator):
     Journal 936, no. 1 (August 2022): 63, https://doi.org/10.3847/1538-4357/ac82b7.
     """
 
-    obs_freq = (551 * units.nm).to(units.Hz, equivalencies=units.spectral())
+    obs_freq = (551 * units.nm).to(units.Hz, equivalencies=units.spectral()).value
 
     def __str__(self):
         return "Generated Doppler Boosting Light Curve"
@@ -122,9 +127,7 @@ class DopplerBoostingLightcurveGenerator(FlatLightcurveGenerator):
         Stellar-Compact Object Binary Systems for Mass Determinations’, The Astrophysical
         Journal 936, no. 1 (August 2022): 63, https://doi.org/10.3847/1538-4357/ac82b7.
         """
-        x = (
-            constants.h * self.obs_freq / (constants.k_B * self.lensing_system.Teff)
-        ).value
+        x = CONST_H * self.obs_freq / (CONST_K_B * self.lensing_system.Teff)
         e_x = numpy.exp(x)
         return (e_x * (3 - x) - 3) / (e_x - 1)
 
@@ -134,9 +137,8 @@ class DopplerBoostingLightcurveGenerator(FlatLightcurveGenerator):
             self.lensing_system, times=self.times, peak_time=self.peak_time
         )
         rv = rvg.rv
-        return (
-            super().flux_array
-            * ((3 - self.alpha) * (rv / constants.c) * self.lensing_system.sin_i).value
+        return super().flux_array * (
+            (3 - self.alpha) * (rv / CONST_C) * self.lensing_system.sin_i
         )
 
 
@@ -163,21 +165,15 @@ class EllipsoidalVariationsLightcurveGenerator(FlatLightcurveGenerator):
     @property
     def flux_array(self):
         phases = self.lensing_system.time_to_phase(self.time_offsets * 2)
-        return (
-            super().flux_array
-            * (
-                (
-                    self.beta
-                    * (self.lensing_system.Macc / self.lensing_system.Mcomp).decompose()
-                    * (self.lensing_system.Rcomp / self.lensing_system.a).decompose()
-                    ** 3
-                    * self.lensing_system.sin_i**2
-                )
-                * (numpy.cos(phases))
-                * -1
+        return super().flux_array * (
+            (
+                self.beta
+                * (self.lensing_system.Macc / self.lensing_system.Mcomp)
+                * (self.lensing_system.Rcomp / self.lensing_system.a) ** 3
+                * self.lensing_system.sin_i**2
             )
-            .decompose()
-            .value
+            * (numpy.cos(phases))
+            * -1
         )
 
 
@@ -326,16 +322,16 @@ class SelfLensingLightcurveGenerator(FlatLightcurveGenerator):
     @property
     def flux_offset(self):
         lensing_simulator = SelfLensingSimulator(
-            self.lensing_system.Rcomp.to(units.R_sun).value,
-            self.lensing_system.rE.to(units.R_sun).value,
+            self.lensing_system.Rcomp / CONST_R_SUN,
+            self.lensing_system.rE / CONST_R_SUN,
         )
         xlp = numpy.linspace(-10, 10, 200)
         projectedOffset = numpy.hypot(xlp, self.lensing_system.b)
-        mags = numpy.array(
-            lensing_simulator.magnifications(projectedOffset.value.tolist())
-        )
+        mags = numpy.array(lensing_simulator.magnifications(projectedOffset.tolist()))
         interpolant = interpolate.interp1d(xlp, mags, bounds_error=False, fill_value=1)
-        repeating_offsets = self.time_offsets % self.lensing_system.porb
+        repeating_offsets = (
+            self.time_offsets.decompose().value % self.lensing_system.porb
+        )
         repeating_offsets = numpy.where(
             repeating_offsets < self.lensing_system.porb / 2,
             repeating_offsets,
@@ -345,7 +341,7 @@ class SelfLensingLightcurveGenerator(FlatLightcurveGenerator):
             repeating_offsets * self.lensing_system.v_avg
         ) / self.lensing_system.rE
 
-        return interpolant(binnedLensPlaneX.decompose().value)
+        return interpolant(binnedLensPlaneX)
 
 
 class LightcurveGenerator(FlatLightcurveGenerator):
@@ -437,8 +433,6 @@ class LightcurveGenerator(FlatLightcurveGenerator):
 
 
 class RVGenerator(GeneratorBase):
-    units = units.m / units.s
-
     def phases(self):
         time_offsets = (self.times - self.peak_time).to(units.day)
         return self.lensing_system.time_to_phase(time_offsets)
@@ -450,7 +444,7 @@ class RVGenerator(GeneratorBase):
             self.lensing_system.v_comp(phases)
             * numpy.sin(phases)
             * self.lensing_system.sin_i
-        ).to(self.units)
+        )
 
     @property
     def rv_deriv(self):

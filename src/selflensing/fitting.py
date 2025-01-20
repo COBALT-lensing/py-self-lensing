@@ -73,21 +73,23 @@ def combined_chi2(
         a=a * SelfLensingSystem.param_units["a"],
         b=0 * SelfLensingSystem.param_units["b"],
         Macc=Macc * SelfLensingSystem.param_units["Macc"],
-        Mcomp=Mcomp,
-        Rcomp=Rcomp,
+        Mcomp=Mcomp * SelfLensingSystem.param_units["Mcomp"],
+        Rcomp=Rcomp * SelfLensingSystem.param_units["Rcomp"],
         e=e * SelfLensingSystem.param_units["e"],
         periapsis_phase=periapsis_phase
         * SelfLensingSystem.param_units["periapsis_phase"],
     )
 
-    porb = model_sls.porb.value
+    porb = model_sls.porb / 86400
 
     period_err = 0
     if len(detected_periods) > 0:
         if porb > minimum_baseline_period:
             return -numpy.inf
-        closest_period = detected_periods[numpy.argmin(numpy.abs(detected_periods - porb))]
-        period_err = gauss_lnprior(porb, closest_period)            
+        closest_period = detected_periods[
+            numpy.argmin(numpy.abs(detected_periods - porb))
+        ]
+        period_err = gauss_lnprior(porb, closest_period)
 
     if porb > maximum_baseline_period:
         return -numpy.inf
@@ -97,16 +99,16 @@ def combined_chi2(
     else:
         rv_gen = RVGenerator(model_sls, times=rv_times, peak_time=peak_time)
         rv_chi2 = chi2(
-            observed_rv.value,
-            observed_rv_err.to(units.m / units.s).value,
-            rv_gen.rv.value,
+            observed_rv,
+            observed_rv_err,
+            rv_gen.rv,
         )
 
     if observed_lc is None:
         lc_chi2 = 0
     else:
         lc_gen = LightcurveGenerator(model_sls, times=lc_times, peak_time=peak_time)
-        lc_chi2 = chi2(observed_lc.value, observed_lc_err.value, lc_gen.flux_array.value)
+        lc_chi2 = chi2(observed_lc, observed_lc_err, lc_gen.flux_array)
 
     return rv_chi2 + lc_chi2 + period_err
 
@@ -115,10 +117,9 @@ def chi2(obs, obs_err, model):
     return -numpy.sum((obs - model) ** 2 / obs_err**2) / len(obs)
 
 
-@units.quantity_input
 def self_lensing_system_from_fit(
-    Mcomp: units.kg,
-    Rcomp: units.m,
+    Mcomp,
+    Rcomp,
     peak_time,
     rv_times=None,
     observed_rv=None,
@@ -126,7 +127,7 @@ def self_lensing_system_from_fit(
     lc_times=None,
     observed_lc=None,
     observed_lc_err=None,
-    Teff: units.K = SelfLensingSystem.DEFAULT_TEFF,
+    Teff=SelfLensingSystem.DEFAULT_TEFF,
     nwalkers=100,
     nsteps=5000,
     burn=500,
@@ -199,8 +200,8 @@ def self_lensing_system_from_fit(
             a=out_a * SelfLensingSystem.param_units["a"],
             b=0 * SelfLensingSystem.param_units["b"],
             Macc=out_Macc * SelfLensingSystem.param_units["Macc"],
-            Rcomp=Rcomp,
-            Mcomp=Mcomp,
+            Rcomp=Rcomp * SelfLensingSystem.param_units["Rcomp"],
+            Mcomp=Mcomp * SelfLensingSystem.param_units["Mcomp"],
             Teff=Teff,
             e=out_e * SelfLensingSystem.param_units["e"],
             periapsis_phase=out_periapsis_phase
