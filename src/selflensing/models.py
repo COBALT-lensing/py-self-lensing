@@ -22,12 +22,12 @@ class SelfLensingSystem(object):
     def __init__(
         self,
         a: units.m,
-        b: units.dimensionless_unscaled,
+        b: units.dimensionless_unscaled,  # type: ignore
         Macc: units.kg,
         Mcomp: units.kg,
         Rcomp: units.m,
         Teff: units.K = DEFAULT_TEFF,
-        e: units.dimensionless_unscaled = DEFAULT_E,
+        e: units.dimensionless_unscaled = DEFAULT_E,  # type: ignore
         periapsis_phase: units.rad = DEFAULT_PERIAPSIS,
     ):
         self.b = b
@@ -38,14 +38,6 @@ class SelfLensingSystem(object):
         self.Teff = Teff.to(self.param_units["Teff"])
         self.e = e
         self.periapsis_phase = periapsis_phase.to(self.param_units["periapsis_phase"])
-
-    @property
-    def a_acc(self):
-        return self.a * self.Mcomp / self.Mtot
-
-    @property
-    def a_comp(self):
-        return self.a * self.Macc / self.Mtot
 
     @property
     def b_max(self):
@@ -71,11 +63,25 @@ class SelfLensingSystem(object):
             * numpy.sqrt(self.a**3 / (constants.G * self.Mtot)).to(units.day)
         )
 
-    @property
-    def rE(self) -> units.R_sun:
-        return numpy.sqrt((4 * constants.G * self.Macc * self.a) / constants.c**2).to(
-            units.R_sun
+    def r(self, m, phase):
+        """
+        The distance from the centre of mass of the object with mass 'm' at 'phase'
+        """
+        r_max = self.a * m / self.Mtot
+        return (r_max * (1 - self.e**2)) / (
+            1 + self.e * numpy.cos(phase - self.periapsis_phase)
         )
+
+    def rE(self, phase=0):
+        return numpy.sqrt(
+            (4 * constants.G * self.Macc * self.r_sep(phase)) / constants.c**2
+        ).to(units.R_sun)
+
+    def r_sep(self, phase=0):
+        """
+        The separation between acc and comp at phase
+        """
+        return self.r(self.Macc, phase) + self.r(self.Mcomp, phase)
 
     @property
     def sin_i(self):
@@ -87,7 +93,7 @@ class SelfLensingSystem(object):
         Journal 936, no. 1 (August 2022): 63, https://doi.org/10.3847/1538-4357/ac82b7.
         """
         psi = numpy.arcsin(
-            (self.b * self.rE) / self.a
+            (self.b * self.rE()) / self.a
         )  # The angular inclination of the source
         return numpy.sin((0.5 * numpy.pi) * units.rad - psi)
 
@@ -101,7 +107,7 @@ class SelfLensingSystem(object):
         https://doi.org/10.1093/mnras/stab2135.
         """
         return (
-            ((self.porb * (self.rE + self.Rcomp)) / (numpy.pi * self.a * self.sin_i))
+            ((self.porb * (self.rE() + self.Rcomp)) / (numpy.pi * self.a * self.sin_i))
             * numpy.sqrt(1 - (self.b / self.b_max) ** 2)
         ).to(units.day)
 
@@ -113,25 +119,25 @@ class SelfLensingSystem(object):
         time = time % self.porb
         return (((time / self.porb).decompose() * 2 * numpy.pi)) * units.rad
 
-    def v(self, a, phase) -> units.m / units.s:
+    def v(self, m, phase):
         """
         Orbital velocity.
         """
-        r = (a * (1 - self.e**2)) / (
-            1 + self.e * numpy.cos(phase - self.periapsis_phase)
+        v = numpy.sqrt(
+            (constants.G * self.Mtot)
+            * (2 / self.r(m, phase) - 1 / (self.a * m / self.Mtot))
         )
-        v = numpy.sqrt((constants.G * self.Mtot) * (2 / r - 1 / a))
         return v.to(units.m / units.s)
 
-    def v_tot(self, phase) -> units.m / units.s:
-        return self.v(self.a, phase)
+    def v_tot(self, phase):
+        return self.v(self.Mtot, phase)
 
-    def v_acc(self, phase) -> units.m / units.s:
-        return self.v(self.a_acc, phase)
+    def v_acc(self, phase):
+        return self.v(self.Macc, phase)
 
     @property
-    def v_avg(self) -> units.m / units.s:
+    def v_avg(self):
         return (2 * numpy.pi * self.a / self.porb).to(units.m / units.s)
 
-    def v_comp(self, phase) -> units.m / units.s:
-        return self.v(self.a_comp, phase)
+    def v_comp(self, phase):
+        return self.v(self.Mcomp, phase)

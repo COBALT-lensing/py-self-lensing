@@ -2,15 +2,15 @@ import mpmath
 import numpy
 import random
 
-from astropy.time import Time
 from astropy.timeseries import TimeSeries
 from astropy import units, constants
 
-from scipy import interpolate, special
+from scipy import special, interpolate
 
 
 # We use scipy for elliptic integrals because it is faster than mpmath
 # but mpmath is faster than scipy for differentiation and integration
+
 
 def ellippi(n, m):
     # https://stackoverflow.com/questions/77488171/complete-integral-of-the-third-kind-using-scipy-python-and-mathematica/77488531#77488531
@@ -145,6 +145,8 @@ class EllipsoidalVariationsLightcurveGenerator(FlatLightcurveGenerator):
     As defined in Nicholas M. Sorabella et al., ‘Modeling Long-Term Variability in
     Stellar-Compact Object Binary Systems for Mass Determinations’, The Astrophysical
     Journal 936, no. 1 (August 2022): 63, https://doi.org/10.3847/1538-4357/ac82b7.
+
+    With the addition of a variable orbital separation to account for eccentricity.
     """
 
     # One day we could use the models from here:
@@ -169,7 +171,9 @@ class EllipsoidalVariationsLightcurveGenerator(FlatLightcurveGenerator):
                 (
                     self.beta
                     * (self.lensing_system.Macc / self.lensing_system.Mcomp).decompose()
-                    * (self.lensing_system.Rcomp / self.lensing_system.a).decompose()
+                    * (
+                        self.lensing_system.Rcomp / self.lensing_system.r_sep(phases)
+                    ).decompose()
                     ** 3
                     * self.lensing_system.sin_i**2
                 )
@@ -185,56 +189,62 @@ class SelfLensingSimulator(object):
     # The following implementation is based on the C++ version at:
     # https://github.com/ou-astrophysics/self-lensing-simulator
 
-    def __init__(self, Rcomp, rE):
+    def __init__(self, Rcomp, rE, sourcePlaneCoordinates):
+        if not isinstance(rE, numpy.ndarray):
+            rE = numpy.full(len(sourcePlaneCoordinates), rE)
         self.radius_unitless = Rcomp / rE
         self.radius_unitless2 = self.radius_unitless**2
+        self.sourcePlaneCoordinates = sourcePlaneCoordinates
 
-    def magnificationAtRadius(self):
-        kernel = (2 / self.radius_unitless) + (
-            (1 + self.radius_unitless2) / self.radius_unitless2
+    def magnificationAtRadius(self, sourcePlaneIdx):
+        kernel = (2 / self.radius_unitless[sourcePlaneIdx]) + (
+            (1 + self.radius_unitless2[sourcePlaneIdx])
+            / self.radius_unitless2[sourcePlaneIdx]
         ) * (
             (numpy.pi / 2)
-            + numpy.arcsin((self.radius_unitless2 - 1) / (self.radius_unitless2 + 1))
+            + numpy.arcsin(
+                (self.radius_unitless2[sourcePlaneIdx] - 1)
+                / (self.radius_unitless2[sourcePlaneIdx] + 1)
+            )
         )
 
         total = kernel / numpy.pi
 
         return total
 
-    def uniform_magnification(self, sourcePlaneCoordinate):
-        if abs(sourcePlaneCoordinate - self.radius_unitless) < 1e-5:
-            return self.magnificationAtRadius()
+    def uniform_magnification(self, sourcePlaneIdx):
+        sourcePlaneCoordinate = self.sourcePlaneCoordinates[sourcePlaneIdx]
+        radius_unitless = self.radius_unitless[sourcePlaneIdx]
+        radius_unitless2 = self.radius_unitless2[sourcePlaneIdx]
+        if abs(sourcePlaneCoordinate - radius_unitless) < 1e-5:
+            return self.magnificationAtRadius(sourcePlaneIdx)
 
-        kernel1 = (sourcePlaneCoordinate - self.radius_unitless) ** 2
+        kernel1 = (sourcePlaneCoordinate - radius_unitless) ** 2
         kernel2 = numpy.sqrt(4.0 + kernel1)
 
         ellipticN = (
             4.0
-            * self.radius_unitless
+            * radius_unitless
             * sourcePlaneCoordinate
-            / ((sourcePlaneCoordinate + self.radius_unitless) ** 2.0)
+            / ((sourcePlaneCoordinate + radius_unitless) ** 2.0)
         )
 
         ellipticK = numpy.sqrt(4.0 * ellipticN) / kernel2
         ellipticM = ellipticK**2
 
-        firstTerm = ((sourcePlaneCoordinate + self.radius_unitless) * kernel2) / (
-            2.0 * (self.radius_unitless2)
+        firstTerm = ((sourcePlaneCoordinate + radius_unitless) * kernel2) / (
+            2.0 * (radius_unitless2)
         )
         secondTerm = (
-            (sourcePlaneCoordinate - self.radius_unitless)
-            * (4.0 + (0.5 * (sourcePlaneCoordinate**2 - self.radius_unitless2)))
-            / (kernel2 * self.radius_unitless2)
+            (sourcePlaneCoordinate - radius_unitless)
+            * (4.0 + (0.5 * (sourcePlaneCoordinate**2 - radius_unitless2)))
+            / (kernel2 * radius_unitless2)
         )
         thirdTerm = (
             2.0
             * kernel1
-            * (1.0 + self.radius_unitless2)
-            / (
-                (self.radius_unitless2)
-                * (sourcePlaneCoordinate + self.radius_unitless)
-                * kernel2
-            )
+            * (1.0 + radius_unitless2)
+            / ((radius_unitless2) * (sourcePlaneCoordinate + radius_unitless) * kernel2)
         )
 
         kernel3 = (
@@ -247,71 +257,69 @@ class SelfLensingSimulator(object):
         negativeSolutionReal = (kernel3 - numpy.pi) / (2.0 * numpy.pi)
         return positiveSolutionReal + negativeSolutionReal
 
-    def radial_profile(self, r):
+    def radial_profile(self, r, sourcePlaneIdx):
         LD_COEFF = 0.6
-        radiusRatio = r / self.radius_unitless
+        radiusRatio = r / self.radius_unitless[sourcePlaneIdx]
         mu = numpy.sqrt(
             1.0 - (radiusRatio**2)
         )  # mu=cos(theta), theta=arcsin(radiusRatio)
         return 1.0 - LD_COEFF * (1.0 - mu)
 
     def _profile_f(self, r):
-        return r * self.radial_profile(r)
+        return r * self.radial_profile(r, self._sourcePlaneIdx)
 
-    def profile_integral(self):
+    def profile_integral(self, sourcePlaneIdx):
+        self._sourcePlaneIdx = sourcePlaneIdx
         return (
             2
             * numpy.pi
             * mpmath.quad(
                 self._profile_f,
-                [0, self.radius_unitless],
+                [0, self.radius_unitless[sourcePlaneIdx]],
                 method="gauss-legendre",
                 # maxdegree=15,
             )
         )
 
-    def magnification_derivative(
-        self, radialCoordinate, sourcePlaneCoordinate, umag=None
-    ):
+    def magnification_derivative(self, radialCoordinate, sourcePlaneIdx, umag=None):
         if radialCoordinate < 0:
             return 0
 
         if umag is None:
-            umag = self.uniform_magnification(sourcePlaneCoordinate)
+            umag = self.uniform_magnification(sourcePlaneIdx)
 
         return mpmath.diff(lambda r: 0 if r < 0 else umag, radialCoordinate)
 
     def _mag_profile_f(self, r):
         return r * self.radial_profile(
-            r
+            r, self._sourcePlaneIdx
         ) * self._umag + 0.5 * r * self.magnification_derivative(
-            r, self._mag_profile_sourcePlaneCoordinate, umag=self._umag
+            r, self._sourcePlaneIdx, umag=self._umag
         )
 
-    def magnification_profile_integral(self, sourcePlaneCoordinate):
-        self._mag_profile_sourcePlaneCoordinate = sourcePlaneCoordinate
-        self._umag = self.uniform_magnification(sourcePlaneCoordinate)
+    def magnification_profile_integral(self, sourcePlaneIdx):
+        self._sourcePlaneIdx = sourcePlaneIdx
+        self._umag = self.uniform_magnification(sourcePlaneIdx)
         return (
             2
             * numpy.pi
             * mpmath.quad(
                 self._mag_profile_f,
-                [0, self.radius_unitless],
+                [0, self.radius_unitless[sourcePlaneIdx]],
                 method="gauss-legendre",
                 # maxdegree=15,
             )
         )
 
-    def magnification(self, sourcePlaneCoordinate):
-        return (
-            self.magnification_profile_integral(sourcePlaneCoordinate)
-            / self.profile_integral()
-        )
+    def magnification(self, sourcePlaneIdx):
+        return self.magnification_profile_integral(
+            sourcePlaneIdx
+        ) / self.profile_integral(sourcePlaneIdx)
 
-    def magnifications(self, sourcePlaneCoordinates):
+    def magnifications(self):
         return [
-            self.magnification(sourcePlaneCoordinate)
-            for sourcePlaneCoordinate in sourcePlaneCoordinates
+            float(self.magnification(sourcePlaneIdx))
+            for sourcePlaneIdx in range(len(self.sourcePlaneCoordinates))
         ]
 
 
@@ -325,25 +333,30 @@ class SelfLensingLightcurveGenerator(FlatLightcurveGenerator):
 
     @property
     def flux_offset(self):
-        lensing_simulator = SelfLensingSimulator(
-            self.lensing_system.Rcomp.to(units.R_sun).value,
-            self.lensing_system.rE.to(units.R_sun).value,
-        )
         xlp = numpy.linspace(-10, 10, 200)
         projectedOffset = numpy.hypot(xlp, self.lensing_system.b)
-        mags = numpy.array(
-            lensing_simulator.magnifications(projectedOffset.value.tolist())
+
+        # phases = ...need phases of each point in xlp to account for eccentricity during
+        # the lensing event. I don't know if it's even worth figuring out how to do that
+        # Fixing phase = 0 is probably enough to get roughly the right rE
+        rE = self.lensing_system.rE()
+
+        lensing_simulator = SelfLensingSimulator(
+            self.lensing_system.Rcomp.to(units.R_sun).value,
+            rE.to(units.R_sun).value,
+            projectedOffset.value.tolist(),
         )
+
+        mags = numpy.array(lensing_simulator.magnifications())
         interpolant = interpolate.interp1d(xlp, mags, bounds_error=False, fill_value=1)
+
         repeating_offsets = self.time_offsets % self.lensing_system.porb
         repeating_offsets = numpy.where(
             repeating_offsets < self.lensing_system.porb / 2,
             repeating_offsets,
             repeating_offsets - self.lensing_system.porb,
         )
-        binnedLensPlaneX = (
-            repeating_offsets * self.lensing_system.v_avg
-        ) / self.lensing_system.rE
+        binnedLensPlaneX = (repeating_offsets * self.lensing_system.v_avg) / rE
 
         return interpolant(binnedLensPlaneX.decompose().value)
 
