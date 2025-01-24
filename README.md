@@ -12,6 +12,12 @@ For now, this can be installed with `pip` directly from GitHub:
 $ pip install git+https://github.com/COBALT-lensing/py-self-lensing.git
 ```
 
+Though while the repo is private you'll likely need to use SSH:
+
+```shell
+pip install git+ssh://git@github.com/COBALT-lensing/py-self-lensing.git
+```
+
 ## Generating light curves and RV
 
 The first step is to define the properties of your self-lensing system:
