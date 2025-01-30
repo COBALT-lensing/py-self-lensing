@@ -77,6 +77,17 @@ class SelfLensingSystem(object):
             (4 * constants.G * self.Macc * self.r_sep(phase)) / constants.c**2
         ).to(units.R_sun)
 
+    @property
+    def r_roche(self):
+        """
+        The Roche lobe radius at periapsis.
+        https://ui.adsabs.harvard.edu/abs/1983ApJ...268..368E/abstract
+        """
+        q = self.Mcomp / self.Macc
+        q23 = q ** (2.0 / 3.0)
+        A = self.r_sep(self.periapsis_phase)
+        return A * ((0.49 * q23) / (0.6 * q23 + numpy.log(1 + q ** (1.0 / 3.0))))
+
     def r_sep(self, phase=0):
         """
         The separation between acc and comp at phase
