@@ -5,10 +5,14 @@ from scipy import special
 
 
 def ellippi(n, m):
-    # https://stackoverflow.com/questions/77488171/complete-integral-of-the-third-kind-using-scipy-python-and-mathematica/77488531#77488531
-    return special.elliprf(0.0, 1.0 - m, 1.0) + (n / 3.0) * special.elliprj(
-        0.0, 1.0 - m, 1.0, 1.0 - n
-    )
+    # https://github.com/scipy/scipy/pull/15787
+    n, m = (numpy.asarray(x) for x in (n, m))
+    if numpy.any(m >= 1):
+        raise ValueError("m must be < 1")
+    y = 1 - m
+    rf = special.elliprf(0, y, 1)
+    rj = special.elliprj(0, y, 1, 1 - n)
+    return rf + rj * n / 3
 
 
 class SelfLensingSimulator(object):
