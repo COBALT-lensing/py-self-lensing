@@ -193,9 +193,7 @@ def heyrovsky_magnification(l, r, Re, Rstar):
 
         A = delta1 + delta2
 
-    A = A / (2 * numpy.pi)
-    print("l=", l, " r=", r, " A=", A)
-    return A
+    return A / (2 * numpy.pi)
 
 
 def integrated_luminosity(A, B):
