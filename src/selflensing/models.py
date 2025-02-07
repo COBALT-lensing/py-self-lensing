@@ -17,27 +17,33 @@ class SelfLensingSystem(object):
     DEFAULT_TEFF = 5000 * units.K
     DEFAULT_PERIAPSIS = 0 * units.rad
     DEFAULT_E = 0 * units.dimensionless_unscaled
+    DEFAULT_B = 0 * units.dimensionless_unscaled
 
     @units.quantity_input
     def __init__(
         self,
         a: units.m,
-        b: units.dimensionless_unscaled,  # type: ignore
         Macc: units.kg,
         Mcomp: units.kg,
         Rcomp: units.m,
+        b: units.dimensionless_unscaled = DEFAULT_B,  # type: ignore
         Teff: units.K = DEFAULT_TEFF,
         e: units.dimensionless_unscaled = DEFAULT_E,  # type: ignore
         periapsis_phase: units.rad = DEFAULT_PERIAPSIS,
+        i: units.deg = None,
     ):
-        self.b = b
         self.a = a.to(self.param_units["a"])
+
         self.Macc = Macc.to(self.param_units["Macc"])
         self.Rcomp = Rcomp.to(self.param_units["Rcomp"])
         self.Mcomp = Mcomp.to(self.param_units["Mcomp"])
         self.Teff = Teff.to(self.param_units["Teff"])
         self.e = e
         self.periapsis_phase = periapsis_phase.to(self.param_units["periapsis_phase"])
+        if i is not None:
+            self.b = (self.a * numpy.sin(i) / self.rE()).decompose()
+        else:
+            self.b = b
 
     @property
     def b_max(self):
@@ -114,6 +120,12 @@ class SelfLensingSystem(object):
         return self.r(self.Macc, phase) + self.r(self.Mcomp, phase)
 
     @property
+    def psi(self):
+        return numpy.arcsin(
+            (self.b * self.rE()) / self.a
+        )  # The angular inclination of the source
+
+    @property
     def sin_i(self):
         """
         sin of orbital inclination
@@ -122,10 +134,7 @@ class SelfLensingSystem(object):
         Stellar-Compact Object Binary Systems for Mass Determinations’, The Astrophysical
         Journal 936, no. 1 (August 2022): 63, https://doi.org/10.3847/1538-4357/ac82b7.
         """
-        psi = numpy.arcsin(
-            (self.b * self.rE()) / self.a
-        )  # The angular inclination of the source
-        return numpy.sin((0.5 * numpy.pi) * units.rad - psi)
+        return numpy.sin((0.5 * numpy.pi) * units.rad - self.psi)
 
     @property
     def tau_eff(self):
