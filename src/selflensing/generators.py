@@ -6,7 +6,7 @@ from astropy import units, constants
 
 from scipy import interpolate
 
-from selflensing.lensing import SelfLensingSimulator
+from selflensing import lensing
 
 
 # We use scipy for elliptic integrals because it is faster than mpmath
@@ -180,15 +180,44 @@ class EllipsoidalVariationsLightcurveGenerator(FlatLightcurveGenerator):
 
 
 class SelfLensingLightcurveGenerator(FlatLightcurveGenerator):
+    DEFAULT_LENSING_METHOD = "NonUniformWittMao"
+
+    lensing_methods = {
+        "NonUniformWittMao": "non_uniform_witt_mao_flux_array",
+        "WittMao": "witt_mao_flux_array",
+        "Heyrovsky": "heyrovsky_flux_array",
+    }
+
+    def __init__(self, *args, lensing_method=DEFAULT_LENSING_METHOD, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.lensing_method = lensing_method
+
     def __str__(self):
         return "Generated Self Lensing Light Curve"
 
     @property
     def flux_array(self):
-        return super().flux_array * self.flux_offset
+        return getattr(self, self.lensing_methods[self.lensing_method])
 
     @property
-    def flux_offset(self):
+    def heyrovsky_flux_array(self):
+        return numpy.array(
+            [
+                lensing.integrated_luminosity(
+                    lambda r: lensing.heyrovsky_magnification(
+                        l,
+                        r,
+                        self.lensing_system.rE().to(units.m).value,
+                        self.lensing_system.Rcomp.to(units.m).value,
+                    ),
+                    lensing.ld_linear,
+                )
+                for l in self.lensing_system.time_to_l(self.time_offsets)
+            ]
+        )
+
+    @property
+    def non_uniform_witt_mao_flux_array(self):
         xlp = numpy.linspace(-10, 10, 200)
         projectedOffset = numpy.hypot(xlp, self.lensing_system.b)
 
@@ -197,7 +226,7 @@ class SelfLensingLightcurveGenerator(FlatLightcurveGenerator):
         # Fixing phase = 0 is probably enough to get roughly the right rE
         rE = self.lensing_system.rE()
 
-        lensing_simulator = SelfLensingSimulator(
+        lensing_simulator = lensing.SelfLensingSimulator(
             self.lensing_system.Rcomp.to(units.R_sun).value,
             rE.to(units.R_sun).value,
             projectedOffset.value.tolist(),
@@ -214,7 +243,22 @@ class SelfLensingLightcurveGenerator(FlatLightcurveGenerator):
         )
         binnedLensPlaneX = (repeating_offsets * self.lensing_system.v_avg) / rE
 
-        return interpolant(binnedLensPlaneX.decompose().value)
+        flux_offset = interpolant(binnedLensPlaneX.decompose().value)
+        return super().flux_array * flux_offset
+
+    @property
+    def witt_mao_flux_array(self):
+        A = numpy.array(
+            [
+                lensing.witt_mao_magnification(
+                    l,
+                    self.lensing_system.rE().to(units.m).value,
+                    self.lensing_system.Rcomp.to(units.m).value,
+                )
+                for l in self.lensing_system.time_to_l(self.time_offsets)
+            ]
+        )
+        return lensing.uniform_luminosity(A, super().flux_array)
 
 
 class LightcurveGenerator(FlatLightcurveGenerator):
@@ -224,7 +268,15 @@ class LightcurveGenerator(FlatLightcurveGenerator):
     Journal 936, no. 1 (August 2022): 63, https://doi.org/10.3847/1538-4357/ac82b7.
     """
 
-    def __init__(self, *args, sl=True, ev=True, db=True, **kwargs):
+    def __init__(
+        self,
+        *args,
+        sl=True,
+        ev=True,
+        db=True,
+        lensing_method=SelfLensingLightcurveGenerator.DEFAULT_LENSING_METHOD,
+        **kwargs,
+    ):
         super().__init__(*args, **kwargs)
         # Baseline is deliberately not passed on to these because we don't want to apply
         # it more than once.
@@ -233,6 +285,7 @@ class LightcurveGenerator(FlatLightcurveGenerator):
                 self.lensing_system,
                 peak_time=self.peak_time,
                 times=self.times,
+                lensing_method=lensing_method,
             )
         else:
             self.sl = FlatLightcurveGenerator(

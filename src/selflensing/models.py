@@ -48,11 +48,30 @@ class SelfLensingSystem(object):
         Astronomical Society 507, no. 1 (11 October 2021): 374–84.
         https://doi.org/10.1093/mnras/stab2135.
         """
-        return 1 + self.Rcomp / self.rE
+        return 1 + self.Rcomp / self.rE()
 
     @property
     def Mtot(self):
         return self.Macc + self.Mcomp
+
+    def phase_to_l(self, phase):
+        """
+        Given a phase angle, compute the distance of the lens from the centre of the disk.
+
+        When the lens is behind the star, assumes l is at its maximum.
+        """
+        phase_limit = 0.5 * numpy.pi * units.rad
+        phase_upper_limit = 2 * numpy.pi * units.rad - phase_limit
+        if isinstance(phase, numpy.ndarray):
+            phase[(phase > phase_limit) & (phase < phase_upper_limit)] = phase_limit
+        elif phase > phase_limit and phase < phase_upper_limit:
+
+            phase = 0.5 * numpy.pi * units.rad
+        return numpy.abs(
+            self.r_sep(phase=phase).to(units.m)
+            * numpy.sin(phase)
+            / self.Rcomp.to(units.m)
+        ).value
 
     @property
     @units.quantity_input
@@ -121,6 +140,9 @@ class SelfLensingSystem(object):
             ((self.porb * (self.rE() + self.Rcomp)) / (numpy.pi * self.a * self.sin_i))
             * numpy.sqrt(1 - (self.b / self.b_max) ** 2)
         ).to(units.day)
+
+    def time_to_l(self, time):
+        return self.phase_to_l(self.time_to_phase(time))
 
     @units.quantity_input
     def time_to_phase(self, time: units.day) -> units.rad:

@@ -6,9 +6,9 @@ from scipy import special
 
 def ellippi(n, m):
     # https://github.com/scipy/scipy/pull/15787
-    n, m = (numpy.asarray(x) for x in (n, m))
-    if numpy.any(m >= 1):
-        raise ValueError("m must be < 1")
+    # n, m = (numpy.asarray(x) for x in (n, m))
+    # if numpy.any(m >= 1):
+    #     raise ValueError("m must be < 1")
     y = 1 - m
     rf = special.elliprf(0, y, 1)
     rj = special.elliprj(0, y, 1, 1 - n)
@@ -151,3 +151,95 @@ class SelfLensingSimulator(object):
             float(self.magnification(sourcePlaneIdx))
             for sourcePlaneIdx in range(len(self.sourcePlaneCoordinates))
         ]
+
+
+def heyrovsky_magnification(l, r, Re, Rstar):
+    """
+    Computes the angle-integrated magnification of the source disk at radius r
+    when the lens is at l distance from the disk centre.
+    """
+    l, r, Re, Rstar = map(float, (l, r, Re, Rstar))
+    epsilon = Re / Rstar
+    delta_limit = 1e-5
+    delta = l - r
+    mod_delta = abs(delta)
+
+    A = 0
+
+    if mod_delta > delta_limit:
+        p = numpy.sqrt(l * r / ((l - r) ** 2 + 4 * epsilon**2))
+        k = 4 * epsilon * p / (l + r)
+        m = k**2
+        phi = 4 * l * r / (l + r) ** 2
+        int1 = special.ellipk(m)
+        phi = -1 * phi
+        int2 = ellippi(phi, m)
+
+        prefix = 4 / ((l + r) * numpy.sqrt((l - r) ** 2 + 4 * epsilon**2))
+        A = prefix * (2 * epsilon**2 * int1 + (l - r) ** 2 * int2)
+
+    elif delta >= 0:
+        delta1 = (
+            (2 * epsilon / l)
+            * (1 - (delta / (2 * l)))
+            * numpy.log(
+                (8 * epsilon * l)
+                / (numpy.sqrt(delta**2) * numpy.sqrt((l**2) + (epsilon**2)))
+            )
+        )
+        delta2 = 4 * numpy.atan(l / epsilon) + delta * epsilon * (
+            2 * (l**2) + (epsilon**2)
+        ) / ((l**2) * ((l**2) + (epsilon**2)))
+
+        A = delta1 + delta2
+
+    A = A / (2 * numpy.pi)
+    print("l=", l, " r=", r, " A=", A)
+    return A
+
+
+def integrated_luminosity(A, B):
+    return float(mpmath.quad(lambda r: B(r) * A(r) * r, [0, 1]))
+
+
+def ld_linear(r):
+    LD_COEFF = 0.6
+    return 1.0 - LD_COEFF * (1.0 - numpy.sqrt(1.0 - (r**2)))
+
+
+def uniform_luminosity(A, L):
+    return A * L
+
+
+def witt_mao_magnification(l, Re, Rstar):
+    r = Rstar / Re
+    r2 = r**2
+    l *= r
+
+    if abs(l - r) < 1e-5:
+        kernel = (2 / r) + ((1 + r2) / r2) * (
+            (numpy.pi / 2) + numpy.arcsin((r2 - 1) / (r2 + 1))
+        )
+        return kernel / numpy.pi
+
+    kernel1 = (l - r) ** 2
+    kernel2 = numpy.sqrt(4.0 + kernel1)
+
+    ellipticN = 4.0 * r * l / ((l + r) ** 2.0)
+
+    ellipticK = numpy.sqrt(4.0 * ellipticN) / kernel2
+    ellipticM = ellipticK**2
+
+    firstTerm = ((l + r) * kernel2) / (2.0 * (r2))
+    secondTerm = (l - r) * (4.0 + (0.5 * (l**2 - r2))) / (kernel2 * r2)
+    thirdTerm = 2.0 * kernel1 * (1.0 + r2) / ((r2) * (l + r) * kernel2)
+
+    kernel3 = (
+        special.ellipe(ellipticM) * firstTerm
+        - special.ellipk(ellipticM) * secondTerm
+        + ellippi(ellipticN, ellipticM) * thirdTerm
+    )
+
+    positiveSolutionReal = (kernel3 + numpy.pi) / (2.0 * numpy.pi)
+    negativeSolutionReal = (kernel3 - numpy.pi) / (2.0 * numpy.pi)
+    return positiveSolutionReal + negativeSolutionReal
