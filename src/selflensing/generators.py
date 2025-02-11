@@ -9,10 +9,6 @@ from scipy import interpolate
 from selflensing import lensing
 
 
-# We use scipy for elliptic integrals because it is faster than mpmath
-# but mpmath is faster than scipy for differentiation and integration
-
-
 class GeneratorBase(object):
     DEFAULT_BINS = 100
     units = units.dimensionless_unscaled

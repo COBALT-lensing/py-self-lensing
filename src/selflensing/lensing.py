@@ -1,7 +1,6 @@
-import mpmath
 import numpy
 
-from scipy import special
+from scipy import special, integrate, differentiate
 
 
 def ellippi(n, m):
@@ -103,22 +102,30 @@ class SelfLensingSimulator(object):
         return (
             2
             * numpy.pi
-            * mpmath.quad(
+            * integrate.fixed_quad(
                 self._profile_f,
-                [0, self.radius_unitless[sourcePlaneIdx]],
-                method="gauss-legendre",
-                # maxdegree=15,
-            )
+                0, self.radius_unitless[sourcePlaneIdx],
+            )[0]
         )
 
     def magnification_derivative(self, radialCoordinate, sourcePlaneIdx, umag=None):
+        if isinstance(radialCoordinate, numpy.ndarray):
+            return numpy.array([self.magnification_derivative(r, sourcePlaneIdx, umag) for r in radialCoordinate])
+        
         if radialCoordinate < 0:
             return 0
 
         if umag is None:
             umag = self.uniform_magnification(sourcePlaneIdx)
 
-        return mpmath.diff(lambda r: 0 if r < 0 else umag, radialCoordinate)
+        def f(r):
+            if isinstance(r, numpy.ndarray):
+                if len(r.shape) == 0:
+                    r = float(r)
+                else:
+                    return numpy.array([f(_r,) for _r in r])
+            return 0 if r < 0 else umag
+        return differentiate.derivative(f, radialCoordinate).df
 
     def _mag_profile_f(self, r):
         return r * self.radial_profile(
@@ -133,12 +140,10 @@ class SelfLensingSimulator(object):
         return (
             2
             * numpy.pi
-            * mpmath.quad(
+            * integrate.fixed_quad(
                 self._mag_profile_f,
-                [0, self.radius_unitless[sourcePlaneIdx]],
-                method="gauss-legendre",
-                # maxdegree=15,
-            )
+                0, self.radius_unitless[sourcePlaneIdx],
+            )[0]
         )
 
     def magnification(self, sourcePlaneIdx):
@@ -158,6 +163,8 @@ def heyrovsky_magnification(l, r, Re, Rstar):
     Computes the angle-integrated magnification of the source disk at radius r
     when the lens is at l distance from the disk centre.
     """
+    if isinstance(r, numpy.ndarray):
+        return numpy.array([heyrovsky_magnification(l, _r, Re, Rstar) for _r in r])
     l, r, Re, Rstar = map(float, (l, r, Re, Rstar))
     epsilon = Re / Rstar
     delta_limit = 1e-5
@@ -197,7 +204,7 @@ def heyrovsky_magnification(l, r, Re, Rstar):
 
 
 def integrated_luminosity(A, B):
-    return float(mpmath.quad(lambda r: B(r) * A(r) * r, [0, 1]))
+    return float(integrate.fixed_quad(lambda r: B(r) * A(r) * r, 0, 1)[0])
 
 
 def ld_linear(r):
