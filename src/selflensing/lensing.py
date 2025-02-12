@@ -104,14 +104,20 @@ class SelfLensingSimulator(object):
             * numpy.pi
             * integrate.fixed_quad(
                 self._profile_f,
-                0, self.radius_unitless[sourcePlaneIdx],
+                0,
+                self.radius_unitless[sourcePlaneIdx],
             )[0]
         )
 
     def magnification_derivative(self, radialCoordinate, sourcePlaneIdx, umag=None):
         if isinstance(radialCoordinate, numpy.ndarray):
-            return numpy.array([self.magnification_derivative(r, sourcePlaneIdx, umag) for r in radialCoordinate])
-        
+            return numpy.array(
+                [
+                    self.magnification_derivative(r, sourcePlaneIdx, umag)
+                    for r in radialCoordinate
+                ]
+            )
+
         if radialCoordinate < 0:
             return 0
 
@@ -123,8 +129,16 @@ class SelfLensingSimulator(object):
                 if len(r.shape) == 0:
                     r = float(r)
                 else:
-                    return numpy.array([f(_r,) for _r in r])
+                    return numpy.array(
+                        [
+                            f(
+                                _r,
+                            )
+                            for _r in r
+                        ]
+                    )
             return 0 if r < 0 else umag
+
         return differentiate.derivative(f, radialCoordinate).df
 
     def _mag_profile_f(self, r):
@@ -142,7 +156,8 @@ class SelfLensingSimulator(object):
             * numpy.pi
             * integrate.fixed_quad(
                 self._mag_profile_f,
-                0, self.radius_unitless[sourcePlaneIdx],
+                0,
+                self.radius_unitless[sourcePlaneIdx],
             )[0]
         )
 
@@ -167,7 +182,7 @@ def heyrovsky_magnification(l, r, Re, Rstar):
         return numpy.array([heyrovsky_magnification(l, _r, Re, Rstar) for _r in r])
     l, r, Re, Rstar = map(float, (l, r, Re, Rstar))
     epsilon = Re / Rstar
-    delta_limit = 1e-5
+    delta_limit = 1e-7
     delta = l - r
     mod_delta = abs(delta)
 
@@ -179,7 +194,6 @@ def heyrovsky_magnification(l, r, Re, Rstar):
         m = k**2
         phi = 4 * l * r / (l + r) ** 2
         int1 = special.ellipk(m)
-        phi = -1 * phi
         int2 = ellippi(phi, m)
 
         prefix = 4 / ((l + r) * numpy.sqrt((l - r) ** 2 + 4 * epsilon**2))
