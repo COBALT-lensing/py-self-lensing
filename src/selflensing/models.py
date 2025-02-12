@@ -22,16 +22,23 @@ class SelfLensingSystem(object):
     @units.quantity_input
     def __init__(
         self,
-        a: units.m,
         Macc: units.kg,
         Mcomp: units.kg,
         Rcomp: units.m,
+        a: units.m = None,
         b: units.dimensionless_unscaled = DEFAULT_B,  # type: ignore
         Teff: units.K = DEFAULT_TEFF,
         e: units.dimensionless_unscaled = DEFAULT_E,  # type: ignore
         periapsis_phase: units.rad = DEFAULT_PERIAPSIS,
         i: units.deg = None,
+        Porb: units.second = None,
     ):
+        if a is None and Porb is None:
+            raise ValueError("You must provide one of a or Porb")
+        if a is None:
+            a = (constants.G * (Macc + Mcomp) * (Porb / (2 * numpy.pi)) ** 2) ** (
+                1.0 / 3.0
+            )
         self.a = a.to(self.param_units["a"])
 
         self.Macc = Macc.to(self.param_units["Macc"])
