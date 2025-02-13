@@ -24,6 +24,8 @@ class SelfLensingSimulator(object):
         self.radius_unitless = Rcomp / rE
         self.radius_unitless2 = self.radius_unitless**2
         self.sourcePlaneCoordinates = sourcePlaneCoordinates
+        self.Rcomp = Rcomp
+        self.rE = rE
 
     def magnificationAtRadius(self, sourcePlaneIdx):
         kernel = (2 / self.radius_unitless[sourcePlaneIdx]) + (
@@ -37,9 +39,7 @@ class SelfLensingSimulator(object):
             )
         )
 
-        total = kernel / numpy.pi
-
-        return total
+        return kernel / numpy.pi
 
     def uniform_magnification(self, sourcePlaneIdx):
         sourcePlaneCoordinate = self.sourcePlaneCoordinates[sourcePlaneIdx]
@@ -125,27 +125,26 @@ class SelfLensingSimulator(object):
             umag = self.uniform_magnification(sourcePlaneIdx)
 
         def f(r):
-            if isinstance(r, numpy.ndarray):
-                if len(r.shape) == 0:
-                    r = float(r)
-                else:
-                    return numpy.array(
-                        [
-                            f(
-                                _r,
-                            )
-                            for _r in r
-                        ]
-                    )
-            return 0 if r < 0 else umag
+            if isinstance(r, numpy.ndarray) and len(r.shape) > 0:
+                res = numpy.full_like(r, 0)
+                res[r >= 0] = umag
+                return res
+            return 0 if float(r) < 0 else umag
 
         return differentiate.derivative(f, radialCoordinate).df
 
     def _mag_profile_f(self, r):
-        return r * self.radial_profile(
-            r, self._sourcePlaneIdx
-        ) * self._umag + 0.5 * r * self.magnification_derivative(
-            r, self._sourcePlaneIdx, umag=self._umag
+        return (
+            r
+            * self.radial_profile(r, self._sourcePlaneIdx)
+            * (
+                self._umag
+                + 0.5
+                * r
+                * self.magnification_derivative(
+                    r, self._sourcePlaneIdx, umag=self._umag
+                )
+            )
         )
 
     def magnification_profile_integral(self, sourcePlaneIdx):
@@ -159,6 +158,17 @@ class SelfLensingSimulator(object):
                 0,
                 self.radius_unitless[sourcePlaneIdx],
             )[0]
+        )
+
+    def new_magnification(self, sourcePlaneIdx):
+        B_int = integrated_brightness_profile(ld_linear)
+        return finite_witt_mao_magnification(
+            self.sourcePlaneCoordinates[sourcePlaneIdx]
+            / self.radius_unitless[sourcePlaneIdx],
+            self.rE[sourcePlaneIdx],
+            self.Rcomp,
+            ld_linear,
+            B_int=B_int,
         )
 
     def magnification(self, sourcePlaneIdx):
@@ -226,32 +236,108 @@ def ld_linear(r):
     return 1.0 - LD_COEFF * (1.0 - numpy.sqrt(1.0 - (r**2)))
 
 
+def uniform_surface(r):
+    if r > 1:
+        return 0.0
+    return 1.0
+
+
 def uniform_luminosity(A, L):
     return A * L
 
 
-def witt_mao_magnification(l, Re, Rstar):
-    r = Rstar / Re
-    r2 = r**2
-    l *= r
+def integrated_brightness_profile(B):
+    return float(integrate.fixed_quad(lambda r: 2 * numpy.pi * r * B(r), 0, 1)[0])
 
-    if abs(l - r) < 1e-5:
-        kernel = (2 / r) + ((1 + r2) / r2) * (
-            (numpy.pi / 2) + numpy.arcsin((r2 - 1) / (r2 + 1))
+
+def radial_witt_mao_magnification(l, r, Re, Rstar, umag=None):
+    if isinstance(l, numpy.ndarray):
+        return numpy.array(
+            [radial_witt_mao_magnification(_l, r, Re, Rstar) for _l in l]
+        )
+    if umag is None:
+        umag = witt_mao_magnification(l, Re, Rstar)
+    res = numpy.full_like(r, 0.0)
+    r_mask = r >= 0
+    res[r_mask] = numpy.full_like(r[r_mask], umag)
+    return res
+
+
+def finite_witt_mao_magnification(l, Re, Rstar, B, B_int=None, umag=None):
+    if B_int is None:
+        B_int = integrated_brightness_profile(B)
+
+    if isinstance(l, numpy.ndarray):
+        return numpy.array(
+            [
+                finite_witt_mao_magnification(_l, Re, Rstar, B, B_int, umag=umag)
+                for _l in l
+            ]
+        )
+
+    if umag is None:
+        umag = witt_mao_magnification(l, Re, Rstar)
+
+    def mag_deriv(r):
+        res = numpy.full_like(r, 0)
+        res[r >= 0] = differentiate.derivative(
+            lambda r: radial_witt_mao_magnification(l, r, Re, Rstar, umag=umag),
+            r[r >= 0],
+        ).df
+        return res
+
+    mag_int = float(
+        integrate.fixed_quad(
+            lambda r: (
+                2
+                * numpy.pi
+                * r
+                * (
+                    radial_witt_mao_magnification(l, r, Re, Rstar, umag=umag)
+                    + r / 2 * mag_deriv(r)
+                )
+                * B(r)
+            ),
+            0,
+            1,
+        )[0]
+    )
+    return mag_int / B_int
+
+
+def witt_mao_magnification(l, Re, Rstar):
+    if isinstance(l, numpy.ndarray):
+        return numpy.array([witt_mao_magnification(_l, Re, Rstar) for _l in l])
+    Rstar_scaled = Rstar / Re
+    Rstar_scaled2 = Rstar_scaled**2
+    l *= Rstar_scaled
+
+    if numpy.isclose(l, Rstar_scaled):
+        kernel = (2 / Rstar_scaled) + ((1 + Rstar_scaled2) / Rstar_scaled2) * (
+            (numpy.pi / 2) + numpy.arcsin((Rstar_scaled2 - 1) / (Rstar_scaled2 + 1))
         )
         return kernel / numpy.pi
 
-    kernel1 = (l - r) ** 2
+    kernel1 = (l - Rstar_scaled) ** 2
     kernel2 = numpy.sqrt(4.0 + kernel1)
 
-    ellipticN = 4.0 * r * l / ((l + r) ** 2.0)
+    ellipticN = 4.0 * Rstar_scaled * l / ((l + Rstar_scaled) ** 2.0)
 
     ellipticK = numpy.sqrt(4.0 * ellipticN) / kernel2
     ellipticM = ellipticK**2
 
-    firstTerm = ((l + r) * kernel2) / (2.0 * (r2))
-    secondTerm = (l - r) * (4.0 + (0.5 * (l**2 - r2))) / (kernel2 * r2)
-    thirdTerm = 2.0 * kernel1 * (1.0 + r2) / ((r2) * (l + r) * kernel2)
+    firstTerm = ((l + Rstar_scaled) * kernel2) / (2.0 * (Rstar_scaled2))
+    secondTerm = (
+        (l - Rstar_scaled)
+        * (4.0 + (0.5 * (l**2 - Rstar_scaled2)))
+        / (kernel2 * Rstar_scaled2)
+    )
+    thirdTerm = (
+        2.0
+        * kernel1
+        * (1.0 + Rstar_scaled2)
+        / ((Rstar_scaled2) * (l + Rstar_scaled) * kernel2)
+    )
 
     kernel3 = (
         special.ellipe(ellipticM) * firstTerm

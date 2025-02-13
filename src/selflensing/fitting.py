@@ -4,7 +4,11 @@ import numpy
 from astropy import units
 
 from selflensing.models import SelfLensingSystem
-from selflensing.generators import RVGenerator, LightcurveGenerator
+from selflensing.generators import (
+    RVGenerator,
+    LightcurveGenerator,
+    SelfLensingLightcurveGenerator,
+)
 
 
 FIT_INIT = {
@@ -50,6 +54,7 @@ def combined_chi2(
     detected_periods,
     minimum_baseline_period,
     maximum_baseline_period,
+    lensing_method,
 ):
     a, Macc, e, periapsis_phase = params
 
@@ -86,8 +91,10 @@ def combined_chi2(
     if len(detected_periods) > 0:
         if porb > minimum_baseline_period:
             return -numpy.inf
-        closest_period = detected_periods[numpy.argmin(numpy.abs(detected_periods - porb))]
-        period_err = gauss_lnprior(porb, closest_period)            
+        closest_period = detected_periods[
+            numpy.argmin(numpy.abs(detected_periods - porb))
+        ]
+        period_err = gauss_lnprior(porb, closest_period)
 
     if porb > maximum_baseline_period:
         return -numpy.inf
@@ -105,8 +112,15 @@ def combined_chi2(
     if observed_lc is None:
         lc_chi2 = 0
     else:
-        lc_gen = LightcurveGenerator(model_sls, times=lc_times, peak_time=peak_time)
-        lc_chi2 = chi2(observed_lc.value, observed_lc_err.value, lc_gen.flux_array.value)
+        lc_gen = LightcurveGenerator(
+            model_sls,
+            times=lc_times,
+            peak_time=peak_time,
+            lensing_method=lensing_method,
+        )
+        lc_chi2 = chi2(
+            observed_lc.value, observed_lc_err.value, lc_gen.flux_array.value
+        )
 
     return rv_chi2 + lc_chi2 + period_err
 
@@ -130,6 +144,7 @@ def self_lensing_system_from_fit(
     nwalkers=100,
     nsteps=5000,
     burn=500,
+    lensing_method=SelfLensingLightcurveGenerator.DEFAULT_LENSING_METHOD,
 ):
     if observed_rv is None and observed_lc is None:
         raise RuntimeError("You must provide at least one of observed_rv, observed_ts")
@@ -177,6 +192,7 @@ def self_lensing_system_from_fit(
                 detected_periods,
                 minimum_baseline_period,
                 maximum_baseline_period,
+                lensing_method,
             ),
             pool=pool,
             moves=[

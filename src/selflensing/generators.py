@@ -176,10 +176,12 @@ class EllipsoidalVariationsLightcurveGenerator(FlatLightcurveGenerator):
 
 
 class SelfLensingLightcurveGenerator(FlatLightcurveGenerator):
-    DEFAULT_LENSING_METHOD = "NonUniformWittMao"
+    DEFAULT_LENSING_METHOD = "NonUniformInterpolatedWittMao"
 
     lensing_methods = {
         "NonUniformWittMao": "non_uniform_witt_mao_flux_array",
+        "NonUniformInterpolatedWittMao": "non_uniform_interpolated_witt_mao_flux_array",
+        "FiniteWittMao": "finite_witt_mao_flux_array",
         "WittMao": "witt_mao_flux_array",
         "Heyrovsky": "heyrovsky_flux_array",
     }
@@ -197,23 +199,26 @@ class SelfLensingLightcurveGenerator(FlatLightcurveGenerator):
 
     @property
     def heyrovsky_flux_array(self):
-        return numpy.array(
-            [
-                lensing.integrated_luminosity(
-                    lambda r: lensing.heyrovsky_magnification(
-                        l,
-                        r,
-                        self.lensing_system.rE().to(units.m).value,
-                        self.lensing_system.Rcomp.to(units.m).value,
-                    ),
-                    lensing.ld_linear,
-                )
-                for l in self.lensing_system.time_to_l(self.time_offsets)
-            ]
+        return (
+            numpy.array(
+                [
+                    lensing.integrated_luminosity(
+                        lambda r: lensing.heyrovsky_magnification(
+                            l,
+                            r,
+                            self.lensing_system.rE().to(units.m).value,
+                            self.lensing_system.Rcomp.to(units.m).value,
+                        ),
+                        lensing.ld_linear,
+                    )
+                    for l in self.lensing_system.time_to_l(self.time_offsets)
+                ]
+            )
+            * super().flux_array
         )
 
     @property
-    def non_uniform_witt_mao_flux_array(self):
+    def non_uniform_interpolated_witt_mao_flux_array(self):
         xlp = numpy.linspace(-10, 10, 200)
         projectedOffset = numpy.hypot(xlp, self.lensing_system.b)
 
@@ -241,6 +246,39 @@ class SelfLensingLightcurveGenerator(FlatLightcurveGenerator):
 
         flux_offset = interpolant(binnedLensPlaneX.decompose().value)
         return super().flux_array * flux_offset
+
+    @property
+    def non_uniform_witt_mao_flux_array(self):
+        rE = self.lensing_system.rE()
+
+        repeating_offsets = self.time_offsets % self.lensing_system.porb
+        repeating_offsets = numpy.where(
+            repeating_offsets < self.lensing_system.porb / 2,
+            repeating_offsets,
+            repeating_offsets - self.lensing_system.porb,
+        )
+        binnedLensPlaneX = (repeating_offsets * self.lensing_system.v_avg) / rE
+        lensing_simulator = lensing.SelfLensingSimulator(
+            self.lensing_system.Rcomp.to(units.R_sun).value,
+            rE.to(units.R_sun).value,
+            binnedLensPlaneX.decompose().value,
+        )
+
+        flux_offset = lensing_simulator.magnifications()
+        return super().flux_array * flux_offset
+
+    @property
+    def finite_witt_mao_flux_array(self):
+        B_int = lensing.integrated_brightness_profile(lensing.ld_linear)
+        A = lensing.finite_witt_mao_magnification(
+            self.lensing_system.time_to_l(self.time_offsets),
+            self.lensing_system.rE().to(units.R_sun).value,
+            self.lensing_system.Rcomp.to(units.R_sun).value,
+            lensing.ld_linear,
+            B_int,
+        )
+
+        return A * super().flux_array
 
     @property
     def witt_mao_flux_array(self):
