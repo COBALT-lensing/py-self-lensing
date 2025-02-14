@@ -251,36 +251,47 @@ def integrated_brightness_profile(B):
 
 
 def radial_witt_mao_magnification(l, r, Re, Rstar, umag=None):
-    if isinstance(l, numpy.ndarray):
-        return numpy.array(
-            [radial_witt_mao_magnification(_l, r, Re, Rstar) for _l in l]
-        )
+    """
+    Given an array of l coordinates and an array of r coordinates, returns an
+    l.shape x r.shape array containing 0 or umag depending on the value of r.
+    """
+    # if isinstance(l, numpy.ndarray):
+    #     return numpy.array(
+    #         [radial_witt_mao_magnification(_l, r, Re, Rstar) for _l in l]
+    #     )
     if umag is None:
         umag = witt_mao_magnification(l, Re, Rstar)
-    res = numpy.full_like(r, 0.0)
+    # res = numpy.full_like(r, 0.0)
+    res = numpy.full(l.shape + r.shape, 0.0)
     r_mask = r >= 0
-    res[r_mask] = numpy.full_like(r[r_mask], umag)
+    r_count = r_mask.sum()
+    # res[r_mask] = numpy.full_like(r[r_mask], umag)
+    # Assign umag to every column where r>=0
+    res[:, r_mask] = (
+        numpy.array([umag for n in range(r_count)]).reshape(r_count, len(umag)).T
+    )
     return res
 
 
-def finite_witt_mao_magnification(l, Re, Rstar, B, B_int=None, umag=None):
+def finite_witt_mao_magnification(l, Re, Rstar, B, B_int=None):
     if B_int is None:
         B_int = integrated_brightness_profile(B)
 
-    if isinstance(l, numpy.ndarray):
-        return numpy.array(
-            [
-                finite_witt_mao_magnification(_l, Re, Rstar, B, B_int, umag=umag)
-                for _l in l
-            ]
-        )
+    # if isinstance(l, numpy.ndarray):
+    #     return numpy.array(
+    #         [
+    #             finite_witt_mao_magnification(_l, Re, Rstar, B, B_int, umag=umag)
+    #             for _l in l
+    #         ]
+    #     )
 
-    if umag is None:
-        umag = witt_mao_magnification(l, Re, Rstar)
+    # if umag is None:
+    umag = witt_mao_magnification(l, Re, Rstar)
 
     def mag_deriv(r):
-        res = numpy.full_like(r, 0)
-        res[r >= 0] = differentiate.derivative(
+        # res = numpy.full_like(r, 0)
+        res = numpy.full(l.shape + r.shape, 0.0)
+        res[:, r >= 0] = differentiate.derivative(
             lambda r: radial_witt_mao_magnification(l, r, Re, Rstar, umag=umag),
             r[r >= 0],
         ).df
@@ -306,45 +317,94 @@ def finite_witt_mao_magnification(l, Re, Rstar, B, B_int=None, umag=None):
 
 
 def witt_mao_magnification(l, Re, Rstar):
-    if isinstance(l, numpy.ndarray):
-        return numpy.array([witt_mao_magnification(_l, Re, Rstar) for _l in l])
     Rstar_scaled = Rstar / Re
     Rstar_scaled2 = Rstar_scaled**2
     l *= Rstar_scaled
 
-    if numpy.isclose(l, Rstar_scaled):
-        kernel = (2 / Rstar_scaled) + ((1 + Rstar_scaled2) / Rstar_scaled2) * (
-            (numpy.pi / 2) + numpy.arcsin((Rstar_scaled2 - 1) / (Rstar_scaled2 + 1))
+    mag_at_radius = (2 / Rstar_scaled) + ((1 + Rstar_scaled2) / Rstar_scaled2) * (
+        (numpy.pi / 2) + numpy.arcsin((Rstar_scaled2 - 1) / (Rstar_scaled2 + 1))
+    ) / numpy.pi
+
+    res = numpy.full_like(l, mag_at_radius)
+    l_mask = numpy.isclose(l, Rstar_scaled)
+
+    def mag(l):
+        kernel1 = (l - Rstar_scaled) ** 2
+        kernel2 = numpy.sqrt(4.0 + kernel1)
+
+        ellipticN = 4.0 * Rstar_scaled * l / ((l + Rstar_scaled) ** 2.0)
+
+        ellipticK = numpy.sqrt(4.0 * ellipticN) / kernel2
+        ellipticM = ellipticK**2
+
+        firstTerm = ((l + Rstar_scaled) * kernel2) / (2.0 * (Rstar_scaled2))
+        secondTerm = (
+            (l - Rstar_scaled)
+            * (4.0 + (0.5 * (l**2 - Rstar_scaled2)))
+            / (kernel2 * Rstar_scaled2)
         )
-        return kernel / numpy.pi
+        thirdTerm = (
+            2.0
+            * kernel1
+            * (1.0 + Rstar_scaled2)
+            / ((Rstar_scaled2) * (l + Rstar_scaled) * kernel2)
+        )
 
-    kernel1 = (l - Rstar_scaled) ** 2
-    kernel2 = numpy.sqrt(4.0 + kernel1)
+        kernel3 = (
+            special.ellipe(ellipticM) * firstTerm
+            - special.ellipk(ellipticM) * secondTerm
+            + ellippi(ellipticN, ellipticM) * thirdTerm
+        )
 
-    ellipticN = 4.0 * Rstar_scaled * l / ((l + Rstar_scaled) ** 2.0)
+        positiveSolutionReal = (kernel3 + numpy.pi) / (2.0 * numpy.pi)
+        negativeSolutionReal = (kernel3 - numpy.pi) / (2.0 * numpy.pi)
+        return positiveSolutionReal + negativeSolutionReal
 
-    ellipticK = numpy.sqrt(4.0 * ellipticN) / kernel2
-    ellipticM = ellipticK**2
+    res[l_mask] = mag(l[l_mask])
 
-    firstTerm = ((l + Rstar_scaled) * kernel2) / (2.0 * (Rstar_scaled2))
-    secondTerm = (
-        (l - Rstar_scaled)
-        * (4.0 + (0.5 * (l**2 - Rstar_scaled2)))
-        / (kernel2 * Rstar_scaled2)
-    )
-    thirdTerm = (
-        2.0
-        * kernel1
-        * (1.0 + Rstar_scaled2)
-        / ((Rstar_scaled2) * (l + Rstar_scaled) * kernel2)
-    )
+    return res
 
-    kernel3 = (
-        special.ellipe(ellipticM) * firstTerm
-        - special.ellipk(ellipticM) * secondTerm
-        + ellippi(ellipticN, ellipticM) * thirdTerm
-    )
 
-    positiveSolutionReal = (kernel3 + numpy.pi) / (2.0 * numpy.pi)
-    negativeSolutionReal = (kernel3 - numpy.pi) / (2.0 * numpy.pi)
-    return positiveSolutionReal + negativeSolutionReal
+# def witt_mao_magnification(l, Re, Rstar):
+#     if isinstance(l, numpy.ndarray):
+#         return numpy.array([witt_mao_magnification(_l, Re, Rstar) for _l in l])
+#     Rstar_scaled = Rstar / Re
+#     Rstar_scaled2 = Rstar_scaled**2
+#     l *= Rstar_scaled
+
+#     if numpy.isclose(l, Rstar_scaled):
+#         kernel = (2 / Rstar_scaled) + ((1 + Rstar_scaled2) / Rstar_scaled2) * (
+#             (numpy.pi / 2) + numpy.arcsin((Rstar_scaled2 - 1) / (Rstar_scaled2 + 1))
+#         )
+#         return kernel / numpy.pi
+
+#     kernel1 = (l - Rstar_scaled) ** 2
+#     kernel2 = numpy.sqrt(4.0 + kernel1)
+
+#     ellipticN = 4.0 * Rstar_scaled * l / ((l + Rstar_scaled) ** 2.0)
+
+#     ellipticK = numpy.sqrt(4.0 * ellipticN) / kernel2
+#     ellipticM = ellipticK**2
+
+#     firstTerm = ((l + Rstar_scaled) * kernel2) / (2.0 * (Rstar_scaled2))
+#     secondTerm = (
+#         (l - Rstar_scaled)
+#         * (4.0 + (0.5 * (l**2 - Rstar_scaled2)))
+#         / (kernel2 * Rstar_scaled2)
+#     )
+#     thirdTerm = (
+#         2.0
+#         * kernel1
+#         * (1.0 + Rstar_scaled2)
+#         / ((Rstar_scaled2) * (l + Rstar_scaled) * kernel2)
+#     )
+
+#     kernel3 = (
+#         special.ellipe(ellipticM) * firstTerm
+#         - special.ellipk(ellipticM) * secondTerm
+#         + ellippi(ellipticN, ellipticM) * thirdTerm
+#     )
+
+#     positiveSolutionReal = (kernel3 + numpy.pi) / (2.0 * numpy.pi)
+#     negativeSolutionReal = (kernel3 - numpy.pi) / (2.0 * numpy.pi)
+#     return positiveSolutionReal + negativeSolutionReal
