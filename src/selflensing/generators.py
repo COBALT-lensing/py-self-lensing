@@ -3,6 +3,7 @@ try:
 except ImportError:
     import numpy
 import random
+import rustlens
 
 from astropy.timeseries import TimeSeries
 from astropy import units, constants
@@ -187,6 +188,8 @@ class SelfLensingLightcurveGenerator(FlatLightcurveGenerator):
         "FiniteWittMao": "finite_witt_mao_flux_array",
         "WittMao": "witt_mao_flux_array",
         "Heyrovsky": "heyrovsky_flux_array",
+        "RustWittMao": "rust_witt_mao_flux_array",
+        "RustIntegratedWittMao": "rust_integrated_witt_mao_flux_array",
     }
 
     def __init__(self, *args, lensing_method=DEFAULT_LENSING_METHOD, **kwargs):
@@ -269,6 +272,48 @@ class SelfLensingLightcurveGenerator(FlatLightcurveGenerator):
 
         flux_offset = lensing_simulator.magnifications()
         return super().flux_array * flux_offset
+
+    @property
+    def rust_integrated_witt_mao_flux_array(self):
+        A = numpy.array(
+            [
+                rustlens.integrated_witt_mao_magnification(
+                    l,
+                    self.lensing_system.rE().to(units.m).value,
+                    self.lensing_system.Rcomp.to(units.m).value,
+                )
+                for l in self.lensing_system.time_to_l(self.time_offsets)
+            ]
+        )
+        return lensing.uniform_luminosity(A, super().flux_array)
+
+    @property
+    def rust_witt_mao_flux_array(self):
+        A = numpy.array(
+            [
+                rustlens.witt_mao_magnification(
+                    l,
+                    self.lensing_system.rE().to(units.m).value,
+                    self.lensing_system.Rcomp.to(units.m).value,
+                )
+                for l in self.lensing_system.time_to_l(self.time_offsets)
+            ]
+        )
+        return lensing.uniform_luminosity(A, super().flux_array)
+
+    @property
+    def witt_mao_flux_array(self):
+        A = numpy.array(
+            [
+                lensing.witt_mao_magnification(
+                    l,
+                    self.lensing_system.rE().to(units.m).value,
+                    self.lensing_system.Rcomp.to(units.m).value,
+                )
+                for l in self.lensing_system.time_to_l(self.time_offsets)
+            ]
+        )
+        return lensing.uniform_luminosity(A, super().flux_array)
 
     @property
     def finite_witt_mao_flux_array(self):
