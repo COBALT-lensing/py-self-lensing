@@ -1,4 +1,7 @@
-import numpy
+try:
+    from jax import numpy
+except ImportError:
+    import numpy
 
 from astropy import units, constants
 

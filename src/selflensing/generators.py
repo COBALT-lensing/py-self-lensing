@@ -1,4 +1,7 @@
-import numpy
+try:
+    from jax import numpy
+except ImportError:
+    import numpy
 import random
 
 from astropy.timeseries import TimeSeries
