@@ -1,7 +1,4 @@
-try:
-    from jax import numpy
-except ImportError:
-    import numpy
+import numpy
 
 from scipy import special, integrate, differentiate
 

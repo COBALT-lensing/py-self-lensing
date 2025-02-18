@@ -1,7 +1,4 @@
-try:
-    from jax import numpy
-except ImportError:
-    import numpy
+import numpy
 import random
 import rustlens
 

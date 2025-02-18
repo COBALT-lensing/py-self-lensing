@@ -1,4 +1,7 @@
+import numpy
+
 from astropy.timeseries import LombScargle
+
 
 
 def get_periods(lc, times):

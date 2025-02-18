@@ -1,9 +1,5 @@
 import emcee
-
-try:
-    from jax import numpy
-except ImportError:
-    import numpy
+import numpy
 
 from astropy import units
 
