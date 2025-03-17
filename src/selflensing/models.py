@@ -80,11 +80,14 @@ class SelfLensingSystem(object):
         elif phase > phase_limit and phase < phase_upper_limit:
 
             phase = 0.5 * numpy.pi * units.rad
-        return numpy.abs(
-            self.r_sep(phase=phase).to(units.m)
-            * numpy.sin(phase)
-            / self.Rcomp.to(units.m)
-        ).value
+        return numpy.hypot(
+            numpy.abs(
+                self.r_sep(phase=phase).to(units.m)
+                * numpy.sin(phase)
+                / self.Rcomp.to(units.m)
+            ).value,
+            self.b.value,
+        )
 
     @property
     @units.quantity_input
@@ -122,7 +125,7 @@ class SelfLensingSystem(object):
 
     def r_sep(self, phase=0):
         """
-        The separation between acc and comp at phase
+        The separation in space between acc and comp at phase
         """
         return self.r(self.Macc, phase) + self.r(self.Mcomp, phase)
 
