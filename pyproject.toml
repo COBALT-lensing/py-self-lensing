@@ -25,6 +25,8 @@ dependencies=[
     "gmpy2",
     "scipy",
     "rustlens",
+    "emcee",
+    "tqdm",
 ]
 
 [project.urls]
