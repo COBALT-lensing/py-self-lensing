@@ -218,6 +218,7 @@ def self_lensing_system_from_fit(
                     0 * SelfLensingSystem.param_units["Macc"],
                     0 * SelfLensingSystem.param_units["Mcomp"],
                     0 * SelfLensingSystem.param_units["Rcomp"],
+                    0 * SelfLensingSystem.param_units["a"],
                 ),
             ),
             pool=pool,
