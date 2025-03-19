@@ -55,6 +55,7 @@ def combined_chi2(
     minimum_baseline_period,
     maximum_baseline_period,
     lensing_method,
+    model_sls=None,
 ):
     a, Macc, e, periapsis_phase = params
 
@@ -74,16 +75,30 @@ def combined_chi2(
     if e < FIT_LIMITS["e"][0] or e >= FIT_LIMITS["e"][1]:
         return -numpy.inf
 
-    model_sls = SelfLensingSystem(
-        a=a * SelfLensingSystem.param_units["a"],
-        b=0 * SelfLensingSystem.param_units["b"],
-        Macc=Macc * SelfLensingSystem.param_units["Macc"],
-        Mcomp=Mcomp,
-        Rcomp=Rcomp,
-        e=e * SelfLensingSystem.param_units["e"],
-        periapsis_phase=periapsis_phase
-        * SelfLensingSystem.param_units["periapsis_phase"],
-    )
+    a = a * SelfLensingSystem.param_units["a"]
+    Macc = Macc * SelfLensingSystem.param_units["Macc"]
+    e = e * SelfLensingSystem.param_units["e"]
+    periapsis_phase = periapsis_phase * SelfLensingSystem.param_units["periapsis_phase"]
+    b = 0 * SelfLensingSystem.param_units["b"]
+
+    if model_sls is None:
+        model_sls = SelfLensingSystem(
+            a=a,
+            b=b,
+            Macc=Macc,
+            Mcomp=Mcomp,
+            Rcomp=Rcomp,
+            e=e,
+            periapsis_phase=periapsis_phase,
+        )
+    else:
+        model_sls.a = a
+        model_sls.b = b
+        model_sls.Macc = Macc
+        model_sls.Mcomp = Mcomp
+        model_sls.Rcomp = Rcomp
+        model_sls.e = e
+        model_sls.periapsis_phase = periapsis_phase
 
     porb = model_sls.porb.value
 
@@ -199,6 +214,7 @@ def self_lensing_system_from_fit(
                 minimum_baseline_period,
                 maximum_baseline_period,
                 lensing_method,
+                SelfLensingSystem(0, 0, 0),
             ),
             pool=pool,
             moves=[
