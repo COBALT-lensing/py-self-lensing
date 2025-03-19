@@ -145,6 +145,7 @@ def self_lensing_system_from_fit(
     nsteps=5000,
     burn=500,
     lensing_method=SelfLensingLightcurveGenerator.DEFAULT_LENSING_METHOD,
+    pool=None,
 ):
     if observed_rv is None and observed_lc is None:
         raise RuntimeError("You must provide at least one of observed_rv, observed_ts")
@@ -172,9 +173,14 @@ def self_lensing_system_from_fit(
     detected_periods = get_periods(observed_lc, times=lc_times.jd)
     detected_periods = detected_periods[detected_periods < minimum_baseline_period]
 
-    from multiprocessing import Pool
+    close_pool = False
+    if pool is None:
+        from multiprocessing import Pool
 
-    with Pool() as pool:
+        pool = Pool()
+        close_pool = True
+
+    try:
         sampler = emcee.EnsembleSampler(
             nwalkers,
             len(p0[0]),
@@ -205,6 +211,9 @@ def self_lensing_system_from_fit(
             nsteps,
             progress=True,
         )
+    finally:
+        if close_pool:
+            pool.close()
     flat_samples = sampler.get_chain(flat=True, discard=burn)
     res = flat_samples[numpy.argmax(sampler.get_log_prob(flat=True, discard=burn))]
 
