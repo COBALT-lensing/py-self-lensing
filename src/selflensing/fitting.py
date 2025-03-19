@@ -214,7 +214,11 @@ def self_lensing_system_from_fit(
                 minimum_baseline_period,
                 maximum_baseline_period,
                 lensing_method,
-                SelfLensingSystem(0, 0, 0),
+                SelfLensingSystem(
+                    0 * SelfLensingSystem.param_units["Macc"],
+                    0 * SelfLensingSystem.param_units["Mcomp"],
+                    0 * SelfLensingSystem.param_units["Rcomp"],
+                ),
             ),
             pool=pool,
             moves=[
