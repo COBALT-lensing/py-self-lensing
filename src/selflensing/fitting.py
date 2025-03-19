@@ -161,6 +161,7 @@ def self_lensing_system_from_fit(
     burn=500,
     lensing_method=SelfLensingLightcurveGenerator.DEFAULT_LENSING_METHOD,
     pool=None,
+    progress=True,
 ):
     if observed_rv is None and observed_lc is None:
         raise RuntimeError("You must provide at least one of observed_rv, observed_ts")
@@ -230,7 +231,7 @@ def self_lensing_system_from_fit(
         sampler.run_mcmc(
             p0,
             nsteps,
-            progress=True,
+            progress=progress,
         )
     finally:
         if close_pool:
