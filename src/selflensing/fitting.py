@@ -195,12 +195,14 @@ def self_lensing_system_from_fit(
     detected_lc_periods = get_periods(observed_lc, lc_times.jd)
     detected_rv_periods = get_periods(observed_rv, rv_times.jd)
 
-    detected_lc_periods = detected_lc_periods[
-        detected_lc_periods < MIN_BASELINE_THRESH * lc_baseline
-    ]
-    detected_rv_periods = detected_rv_periods[
-        detected_rv_periods < MIN_BASELINE_THRESH * rv_baseline
-    ]
+    if len(detected_lc_periods) > 0:
+        detected_lc_periods = detected_lc_periods[
+            detected_lc_periods < MIN_BASELINE_THRESH * lc_baseline
+        ]
+    if len(detected_rv_periods) > 0:
+        detected_rv_periods = detected_rv_periods[
+            detected_rv_periods < MIN_BASELINE_THRESH * rv_baseline
+        ]
 
     detected_periods = numpy.concatenate([detected_lc_periods, detected_rv_periods])
 
