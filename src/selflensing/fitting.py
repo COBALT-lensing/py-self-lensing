@@ -188,9 +188,9 @@ def self_lensing_system_from_fit(
     lc_baseline = lc_times[-1].jd - lc_times[0].jd
     rv_baseline = rv_times[-1].jd - rv_times[0].jd
 
-    baselines = (lc_baseline, rv_baseline)
-    minimum_baseline_period = MIN_BASELINE_THRESH * min(baselines)
-    maximum_baseline_period = MAX_BASELINE_THRESH * max(baselines)
+    baseline = max(lc_baseline, rv_baseline)
+    minimum_baseline_period = MIN_BASELINE_THRESH * baseline
+    maximum_baseline_period = MAX_BASELINE_THRESH * baseline
 
     detected_lc_periods = get_periods(observed_lc, lc_times.jd)
     detected_rv_periods = get_periods(observed_rv, rv_times.jd)
