@@ -182,12 +182,27 @@ def self_lensing_system_from_fit(
 
     from selflensing.lombscargle import get_periods
 
-    baseline = lc_times[-1].jd - lc_times[0].jd
-    minimum_baseline_period = 0.9 * baseline
-    maximum_baseline_period = 2 * baseline
+    MIN_BASELINE_THRESH = 0.9
+    MAX_BASELINE_THRESH = 2
 
-    detected_periods = get_periods(observed_lc, times=lc_times.jd)
-    detected_periods = detected_periods[detected_periods < minimum_baseline_period]
+    lc_baseline = lc_times[-1].jd - lc_times[0].jd
+    rv_baseline = rv_times[-1].jd - rv_times[0].jd
+
+    baselines = (lc_baseline, rv_baseline)
+    minimum_baseline_period = MIN_BASELINE_THRESH * min(baselines)
+    maximum_baseline_period = MAX_BASELINE_THRESH * max(baselines)
+
+    detected_lc_periods = get_periods(observed_lc, lc_times.jd)
+    detected_rv_periods = get_periods(observed_rv, rv_times.jd)
+
+    detected_lc_periods = detected_lc_periods[
+        detected_lc_periods < MIN_BASELINE_THRESH * lc_baseline
+    ]
+    detected_rv_periods = detected_rv_periods[
+        detected_rv_periods < MIN_BASELINE_THRESH * rv_baseline
+    ]
+
+    detected_periods = numpy.concatenate([detected_lc_periods, detected_rv_periods])
 
     close_pool = False
     if pool is None:
