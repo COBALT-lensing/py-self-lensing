@@ -185,24 +185,31 @@ def self_lensing_system_from_fit(
     MIN_BASELINE_THRESH = 0.9
     MAX_BASELINE_THRESH = 2
 
-    lc_baseline = lc_times[-1].jd - lc_times[0].jd
-    rv_baseline = rv_times[-1].jd - rv_times[0].jd
-
-    baseline = max(lc_baseline, rv_baseline)
-    minimum_baseline_period = MIN_BASELINE_THRESH * baseline
-    maximum_baseline_period = MAX_BASELINE_THRESH * baseline
-
-    detected_lc_periods = get_periods(observed_lc, lc_times.jd)
-    detected_rv_periods = get_periods(observed_rv, rv_times.jd)
+    lc_baseline = 0
+    detected_lc_periods = []
+    if lc_times is not None:
+        lc_baseline = lc_times[-1].jd - lc_times[0].jd
+        detected_lc_periods = get_periods(observed_lc, lc_times.jd)
 
     if len(detected_lc_periods) > 0:
         detected_lc_periods = detected_lc_periods[
             detected_lc_periods < MIN_BASELINE_THRESH * lc_baseline
         ]
-    if len(detected_rv_periods) > 0:
-        detected_rv_periods = detected_rv_periods[
-            detected_rv_periods < MIN_BASELINE_THRESH * rv_baseline
-        ]
+
+    rv_baseline = 0
+    detected_rv_periods = []
+    if rv_times is not None:
+        rv_baseline = rv_times[-1].jd - rv_times[0].jd
+        detected_rv_periods = get_periods(observed_rv, rv_times.jd)
+
+        if len(detected_rv_periods) > 0:
+            detected_rv_periods = detected_rv_periods[
+                detected_rv_periods < MIN_BASELINE_THRESH * rv_baseline
+            ]
+
+    baseline = max(lc_baseline, rv_baseline)
+    minimum_baseline_period = MIN_BASELINE_THRESH * baseline
+    maximum_baseline_period = MAX_BASELINE_THRESH * baseline
 
     detected_periods = numpy.concatenate([detected_lc_periods, detected_rv_periods])
 
