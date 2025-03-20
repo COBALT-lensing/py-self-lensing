@@ -195,6 +195,8 @@ def self_lensing_system_from_fit(
 
         pool = Pool()
         close_pool = True
+    if pool is False:
+        pool = NotImplemented
 
     try:
         sampler = emcee.EnsembleSampler(
