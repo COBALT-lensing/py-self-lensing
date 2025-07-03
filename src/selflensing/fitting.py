@@ -71,7 +71,7 @@ def combined_chi2(
     ):
         return -numpy.inf
 
-    # e = 1 is parabolic
+    # e = 1 is parabolic, so less than but not equal
     if e < FIT_LIMITS["e"][0] or e >= FIT_LIMITS["e"][1]:
         return -numpy.inf
 
