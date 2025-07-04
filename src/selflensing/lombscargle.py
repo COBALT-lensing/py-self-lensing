@@ -2,6 +2,9 @@ from astropy.timeseries import LombScargle
 
 
 def get_periods(lc, times):
+    # Autopower fails with one point, false_alarm_level fails with exactly three points
+    # In reality the lower limit could be higher but I'm reluctant to set an arbitrary
+    # minimum.
     if len(times) <= 3:
         return []
     maximum_frequency = 0.5
