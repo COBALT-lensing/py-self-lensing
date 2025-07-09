@@ -10,20 +10,8 @@ from selflensing.generators import (
     SelfLensingLightcurveGenerator,
 )
 
-
-FIT_INIT = {
-    "a": 5.0,
-    "b": 0.0,
-    "Macc": 10,
-    "Rcomp": 1,
-    "Mcomp": 1,
-    "Teff": 5000,
-    "e": 0,
-    "periapsis_phase": 0,
-}
 FIT_LIMITS = {
     "a": (0.01, 50),
-    # "a": (1.0, 1.2),
     "b": (0, 10),
     "Macc": (0.1, 50),
     "Rcomp": (0.1, 1000),
@@ -57,7 +45,7 @@ def combined_chi2(
     lensing_method,
     model_sls=None,
 ):
-    a, Macc, e, periapsis_phase = params
+    a, b, Macc, e, periapsis_phase = params
 
     if a < FIT_LIMITS["a"][0] or a > FIT_LIMITS["a"][1]:
         return -numpy.inf
@@ -79,7 +67,7 @@ def combined_chi2(
     Macc = Macc * SelfLensingSystem.param_units["Macc"]
     e = e * SelfLensingSystem.param_units["e"]
     periapsis_phase = periapsis_phase * SelfLensingSystem.param_units["periapsis_phase"]
-    b = 0 * SelfLensingSystem.param_units["b"]
+    b = b * SelfLensingSystem.param_units["b"]
 
     if model_sls is None:
         model_sls = SelfLensingSystem(
@@ -172,6 +160,7 @@ def self_lensing_system_from_fit(
                 numpy.random.uniform(bounds[0], bounds[1], nwalkers)
                 for bounds in (
                     FIT_LIMITS["a"],
+                    FIT_LIMITS["b"],
                     FIT_LIMITS["Macc"],
                     FIT_LIMITS["e"],
                     FIT_LIMITS["periapsis_phase"],
