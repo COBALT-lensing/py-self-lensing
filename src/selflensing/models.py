@@ -64,6 +64,14 @@ class SelfLensingSystem(object):
         return 1 + self.Rcomp / self.rE()
 
     @property
+    def b_source(self):
+        """
+        The impact parameter in units of Rcomp (source radii). b_source=1 when the lens is at
+        the edge of the stellar disk.
+        """
+        return self.b * (self.rE() / self.Rcomp)
+
+    @property
     def Mtot(self):
         return self.Macc + self.Mcomp
 
@@ -86,7 +94,7 @@ class SelfLensingSystem(object):
                 * numpy.sin(phase)
                 / self.Rcomp.to(units.m)
             ).value,
-            self.b.value,
+            self.b_source.value,
         )
 
     @property
