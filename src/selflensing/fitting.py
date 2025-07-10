@@ -50,6 +50,9 @@ def combined_chi2(
     if a < FIT_LIMITS["a"][0] or a > FIT_LIMITS["a"][1]:
         return -numpy.inf
 
+    if b < FIT_LIMITS["b"][0] or b > FIT_LIMITS["b"][1]:
+        return -numpy.inf
+
     if Macc < FIT_LIMITS["Macc"][0] or Macc > FIT_LIMITS["Macc"][1]:
         return -numpy.inf
 
