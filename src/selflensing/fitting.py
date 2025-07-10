@@ -256,12 +256,12 @@ def self_lensing_system_from_fit(
     flat_samples = sampler.get_chain(flat=True, discard=burn)
     res = flat_samples[numpy.argmax(sampler.get_log_prob(flat=True, discard=burn))]
 
-    out_a, out_Macc, out_e, out_periapsis_phase = res
+    out_a, out_b, out_Macc, out_e, out_periapsis_phase = res
 
     return (
         SelfLensingSystem(
             a=out_a * SelfLensingSystem.param_units["a"],
-            b=0 * SelfLensingSystem.param_units["b"],
+            b=out_b * SelfLensingSystem.param_units["b"],
             Macc=out_Macc * SelfLensingSystem.param_units["Macc"],
             Rcomp=Rcomp,
             Mcomp=Mcomp,
