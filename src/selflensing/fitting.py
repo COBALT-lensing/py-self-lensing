@@ -192,7 +192,7 @@ def self_lensing_system_from_fit(
     detected_rv_periods = []
     if rv_times is not None:
         rv_baseline = rv_times[-1].jd - rv_times[0].jd
-        detected_rv_periods = get_periods(observed_rv, rv_times.jd)
+        detected_rv_periods = get_periods(observed_rv, rv_times.jd, min_fal_prob)
 
         if len(detected_rv_periods) > 0:
             detected_rv_periods = detected_rv_periods[
