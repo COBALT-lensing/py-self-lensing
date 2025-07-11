@@ -11,7 +11,7 @@ from selflensing.generators import (
 )
 
 FIT_LIMITS = {
-    "a": (0.01, 50),
+    "a": (0.01, 200),
     "b": (0, 10),
     "Macc": (0.1, 50),
     "Rcomp": (0.1, 1000),
