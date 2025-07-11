@@ -40,8 +40,6 @@ def combined_chi2(
     observed_lc,
     observed_lc_err,
     detected_periods,
-    # minimum_baseline_period,
-    # maximum_baseline_period,
     lensing_method,
     model_sls=None,
 ):
@@ -95,15 +93,10 @@ def combined_chi2(
 
     period_err = 0
     if len(detected_periods) > 0:
-        # if porb > minimum_baseline_period:
-        #     return -numpy.inf
         closest_period = detected_periods[
             numpy.argmin(numpy.abs(detected_periods - porb))
         ]
         period_err = gauss_lnprior(porb, closest_period)
-
-    # if porb > maximum_baseline_period:
-    #     return -numpy.inf
 
     if observed_rv is None:
         rv_chi2 = 0
@@ -199,10 +192,6 @@ def self_lensing_system_from_fit(
                 detected_rv_periods < MAX_PERIOD_THRESH * rv_baseline
             ]
 
-    # baseline = max(lc_baseline, rv_baseline)
-    # minimum_baseline_period = MIN_BASELINE_THRESH * baseline
-    # maximum_baseline_period = MAX_BASELINE_THRESH * baseline
-
     detected_periods = numpy.concatenate([detected_lc_periods, detected_rv_periods])
 
     close_pool = False
@@ -230,8 +219,6 @@ def self_lensing_system_from_fit(
                 observed_lc,
                 observed_lc_err,
                 detected_periods,
-                # minimum_baseline_period,
-                # maximum_baseline_period,
                 lensing_method,
                 SelfLensingSystem(
                     0 * SelfLensingSystem.param_units["Macc"],
