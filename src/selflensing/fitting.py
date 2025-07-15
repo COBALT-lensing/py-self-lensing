@@ -174,7 +174,9 @@ def self_lensing_system_from_fit(
     detected_lc_periods = []
     if lc_times is not None:
         lc_baseline = lc_times[-1].jd - lc_times[0].jd
-        detected_lc_periods = get_periods(observed_lc, lc_times.jd, min_fal_prob)
+        detected_lc_periods = get_periods(
+            observed_lc, lc_times.jd, false_alarm_probability
+        )
 
     if len(detected_lc_periods) > 0:
         detected_lc_periods = detected_lc_periods[

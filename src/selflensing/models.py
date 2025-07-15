@@ -86,7 +86,6 @@ class SelfLensingSystem(object):
         if isinstance(phase, numpy.ndarray):
             phase[(phase > phase_limit) & (phase < phase_upper_limit)] = phase_limit
         elif phase > phase_limit and phase < phase_upper_limit:
-
             phase = 0.5 * numpy.pi * units.rad
         return numpy.hypot(
             numpy.abs(
