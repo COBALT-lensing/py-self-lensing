@@ -140,7 +140,7 @@ def self_lensing_system_from_fit(
     observed_lc=None,
     observed_lc_err=None,
     Teff: units.K = SelfLensingSystem.DEFAULT_TEFF,
-    min_fal_prob=0.1,
+    false_alarm_probability=0.1,
     nwalkers=100,
     nsteps=5000,
     burn=500,
@@ -185,7 +185,9 @@ def self_lensing_system_from_fit(
     detected_rv_periods = []
     if rv_times is not None:
         rv_baseline = rv_times[-1].jd - rv_times[0].jd
-        detected_rv_periods = get_periods(observed_rv, rv_times.jd, min_fal_prob)
+        detected_rv_periods = get_periods(
+            observed_rv, rv_times.jd, false_alarm_probability
+        )
 
         if len(detected_rv_periods) > 0:
             detected_rv_periods = detected_rv_periods[

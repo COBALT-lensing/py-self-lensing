@@ -1,7 +1,7 @@
 from astropy.timeseries import LombScargle
 
 
-def get_periods(lc, times, min_fal_prob=0.1):
+def get_periods(lc, times, false_alarm_probability=0.1):
     # Autopower fails with one point, false_alarm_level fails with exactly three points
     # In reality the lower limit could be higher but I'm reluctant to set an arbitrary
     # minimum.
@@ -14,5 +14,5 @@ def get_periods(lc, times, min_fal_prob=0.1):
         maximum_frequency=maximum_frequency, minimum_frequency=minimum_frequency
     )
 
-    fal = ls.false_alarm_level(min_fal_prob)
+    fal = ls.false_alarm_level(false_alarm_probability)
     return 1 / frequency[power > fal]
