@@ -32,6 +32,7 @@ def combined_chi2(
     params,
     Mcomp,
     Rcomp,
+    tau_eff,
     peak_time,
     rv_times,
     observed_rv,
@@ -89,18 +90,22 @@ def combined_chi2(
         model_sls.e = e
         model_sls.periapsis_phase = periapsis_phase
 
-    porb = model_sls.porb.value
-
     period_err = 0
     if len(detected_periods) > 0:
+        porb = model_sls.porb.value
         closest_period = detected_periods[
             numpy.argmin(numpy.abs(detected_periods - porb))
         ]
         period_err = gauss_lnprior(porb, closest_period)
 
-    if observed_rv is None:
-        rv_chi2 = 0
-    else:
+    tau_eff_err = 0
+    if tau_eff is not None:
+        tau_eff_err = gauss_lnprior(
+            model_sls.tau_eff.to(units.day).value, tau_eff.to(units.day).value
+        )
+
+    rv_chi2 = 0
+    if observed_rv is not None:
         rv_gen = RVGenerator(model_sls, times=rv_times, peak_time=peak_time)
         rv_chi2 = chi2(
             observed_rv.value,
@@ -108,9 +113,8 @@ def combined_chi2(
             rv_gen.rv.value,
         )
 
-    if observed_lc is None:
-        lc_chi2 = 0
-    else:
+    lc_chi2 = 0
+    if observed_lc is not None:
         lc_gen = LightcurveGenerator(
             model_sls,
             times=lc_times,
@@ -121,7 +125,7 @@ def combined_chi2(
             observed_lc.value, observed_lc_err.value, lc_gen.flux_array.value
         )
 
-    return rv_chi2 + lc_chi2 + period_err
+    return rv_chi2 + lc_chi2 + period_err + tau_eff_err
 
 
 def chi2(obs, obs_err, model):
@@ -140,6 +144,7 @@ def self_lensing_system_from_fit(
     observed_lc=None,
     observed_lc_err=None,
     Teff: units.K = SelfLensingSystem.DEFAULT_TEFF,
+    tau_eff: units.day = None,
     false_alarm_probability=0.1,
     nwalkers=100,
     nsteps=5000,
@@ -215,6 +220,7 @@ def self_lensing_system_from_fit(
             args=(
                 Mcomp,
                 Rcomp,
+                tau_eff,
                 peak_time,
                 rv_times,
                 observed_rv,
