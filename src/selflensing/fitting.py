@@ -1,5 +1,6 @@
 import emcee
 import numpy
+import warnings
 
 from astropy import units
 
@@ -9,6 +10,8 @@ from selflensing.generators import (
     LightcurveGenerator,
     SelfLensingLightcurveGenerator,
 )
+
+warnings.filterwarnings("ignore", module="erfa.core")
 
 FIT_LIMITS = {
     "a": (0.01, 200),
