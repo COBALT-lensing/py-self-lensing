@@ -25,7 +25,9 @@ FIT_LIMITS = {
 }
 
 
-def gauss_lnprior(x, mu, sigma=1):
+def gauss_lnprior(x, mu, sigma=None):
+    if sigma is None:
+        sigma = mu // 10
     # https://stackoverflow.com/questions/49810234/using-emcee-with-gaussian-priors
     gauss_norm = numpy.log(1.0 / (numpy.sqrt(2 * numpy.pi) * sigma))
     return gauss_norm - 0.5 * (x - mu) ** 2 / sigma**2
