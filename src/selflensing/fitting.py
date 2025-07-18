@@ -167,20 +167,23 @@ def self_lensing_system_from_fit(
     if observed_rv is None and observed_lc is None:
         raise RuntimeError("You must provide at least one of observed_rv, observed_ts")
 
-    p0 = list(
-        zip(
-            *[
-                numpy.random.uniform(bounds[0], bounds[1], nwalkers)
-                for bounds in (
-                    FIT_LIMITS["a"],
-                    FIT_LIMITS["b"],
-                    FIT_LIMITS["Macc"],
-                    FIT_LIMITS["e"],
-                    FIT_LIMITS["periapsis_phase"],
-                )
-            ]
+    p0 = [
+        numpy.random.uniform(bounds[0], bounds[1], nwalkers)
+        for bounds in (
+            FIT_LIMITS["b"],
+            FIT_LIMITS["Macc"],
+            FIT_LIMITS["e"],
+            FIT_LIMITS["periapsis_phase"],
         )
+    ]
+    p0.insert(
+        0,
+        numpy.logspace(
+            numpy.log10(FIT_LIMITS["a"][0]), numpy.log10(FIT_LIMITS["a"][1]), nwalkers
+        ),
     )
+
+    p0 = list(zip(*p0))
 
     from selflensing.lombscargle import get_periods
 
