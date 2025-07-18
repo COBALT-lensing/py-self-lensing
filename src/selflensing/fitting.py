@@ -102,7 +102,7 @@ def combined_chi2(
         closest_period = detected_periods[
             numpy.argmin(numpy.abs(detected_periods - porb))
         ]
-        period_err = gauss_lnprior(porb, closest_period, sigma=1)
+        period_err = gauss_lnprior(porb, closest_period, sigma=0.1)
 
     tau_eff_err = 0
     if tau_eff is not None:
