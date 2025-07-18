@@ -1,4 +1,5 @@
 import emcee
+import logging
 import numpy
 import warnings
 
@@ -164,6 +165,7 @@ def self_lensing_system_from_fit(
     pool=None,
     progress=True,
 ):
+    logging.debug(f"fit: nwalkers={nwalkers}, nsteps={nsteps}")
     if observed_rv is None and observed_lc is None:
         raise RuntimeError("You must provide at least one of observed_rv, observed_ts")
 
