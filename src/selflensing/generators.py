@@ -5,8 +5,6 @@ import rustlens
 from astropy.timeseries import TimeSeries
 from astropy import units, constants
 
-from scipy import interpolate
-
 
 class GeneratorBase(object):
     DEFAULT_BINS = 100
