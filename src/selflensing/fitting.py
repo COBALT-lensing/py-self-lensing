@@ -5,8 +5,8 @@ import warnings
 
 from astropy import units
 
-from selflensing.models import SelfLensingSystem
-from selflensing.generators import (
+from .models import SelfLensingSystem
+from .generators import (
     RVGenerator,
     LightcurveGenerator,
     SelfLensingLightcurveGenerator,
@@ -187,7 +187,7 @@ def self_lensing_system_from_fit(
 
     p0 = list(zip(*p0))
 
-    from selflensing.lombscargle import get_periods
+    from .lombscargle import get_periods
 
     MAX_PERIOD_THRESH = 0.9
 
