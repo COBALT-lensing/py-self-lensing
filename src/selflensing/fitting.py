@@ -48,6 +48,7 @@ def combined_chi2(
     observed_lc_err,
     detected_periods,
     lensing_method,
+    weight_lc_peak=False,
     model_sls=None,
 ):
     a, b, Macc, e, periapsis_phase = params
@@ -133,6 +134,10 @@ def combined_chi2(
             peak_time=peak_time,
             lensing_method=lensing_method,
         )
+        lc_err = observed_lc_err.value
+        if weight_lc_peak:
+            # Reduce the weight of points further from the peak
+            lc_err *= 1 + (peak_time - lc_times).value ** 2
         lc_chi2 = chi2(
             observed_lc.value, observed_lc_err.value, lc_gen.flux_array.value
         )
@@ -158,6 +163,7 @@ def self_lensing_system_from_fit(
     Teff: units.K = SelfLensingSystem.DEFAULT_TEFF,
     tau_eff: units.day = None,
     false_alarm_probability=0.1,
+    weight_lc_peak=False,
     nwalkers=100,
     nsteps=5000,
     burn=500,
@@ -246,6 +252,7 @@ def self_lensing_system_from_fit(
                 observed_lc_err,
                 detected_periods,
                 lensing_method,
+                weight_lc_peak,
                 SelfLensingSystem(
                     0 * SelfLensingSystem.param_units["Macc"],
                     0 * SelfLensingSystem.param_units["Mcomp"],
