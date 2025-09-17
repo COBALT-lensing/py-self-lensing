@@ -38,6 +38,35 @@ class GeneratorBase(object):
             self.bins = bins
             self.times = numpy.linspace(self.start_time, self.end_time, num=self.bins)
 
+    @property
+    def time_offsets(self):
+        return (self.times - self.peak_time).jd * units.day
+
+    @property
+    def peak_times(self):
+        times = []
+        i = 0
+        while True:
+            new_peak = self.peak_time + (i * self.lensing_system.porb)
+            if new_peak > self.times[-1]:
+                break
+            times.append(new_peak)
+            i += 1
+
+        i = 1
+        while True:
+            new_peak = self.peak_time - (i * self.lensing_system.porb)
+            if new_peak < self.times[0]:
+                break
+            times.append(new_peak)
+            i += 1
+
+        return sorted(times)
+
+    @property
+    def peak_time_offsets(self):
+        return [(t - self.peak_time).jd for t in self.peak_times] * units.day
+
 
 class FlatLightcurveGenerator(GeneratorBase):
     def __init__(
@@ -51,10 +80,6 @@ class FlatLightcurveGenerator(GeneratorBase):
 
     def __str__(self):
         return "Generated Flat Light Curve"
-
-    @property
-    def time_offsets(self):
-        return (self.times - self.peak_time).jd * units.day
 
     def fit(self, timeseries=None, flux=None, err2=None, nu=None):
         if flux is None:
