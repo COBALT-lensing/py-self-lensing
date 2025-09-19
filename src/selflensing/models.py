@@ -47,16 +47,33 @@ class SelfLensingSystem(object):
         self.Teff = Teff.to(self.param_units["Teff"])
         self.e = e
         self.periapsis_phase = periapsis_phase.to(self.param_units["periapsis_phase"])
-        # Calculate b and i as per Wiktorowicz+2021
         if i is not None:
             self.i = i
-            self.sin_i = numpy.sin(i)
-            self.b = (self.a * numpy.cos(i) / self.rE()).decompose()
         else:
             self.b = b
-            cos_i = b * self.rE() / a
-            self.i = numpy.arccos(cos_i)
-            self.sin_i = numpy.sin(self.i)
+
+    @property
+    def b(self):
+        return self._b
+
+    @b.setter
+    def b(self, b):
+        # Calculate as per Wiktorowicz+2021
+        self._b = b
+        cos_i = (b * self.rE() / self.a).decompose()
+        self._i = numpy.arccos(cos_i)
+        self.sin_i = numpy.sin(self._i)
+
+    @property
+    def i(self):
+        return self._i
+
+    @i.setter
+    def i(self, i):
+        # Calculate as per Wiktorowicz+2021
+        self._i = i
+        self.sin_i = numpy.sin(i)
+        self._b = (self.a * numpy.cos(i) / self.rE()).decompose()
 
     @property
     def b_max(self):
