@@ -47,10 +47,16 @@ class SelfLensingSystem(object):
         self.Teff = Teff.to(self.param_units["Teff"])
         self.e = e
         self.periapsis_phase = periapsis_phase.to(self.param_units["periapsis_phase"])
+        # Calculate b and i as per Wiktorowicz+2021
         if i is not None:
-            self.b = (self.a * numpy.sin(i) / self.rE()).decompose()
+            self.i = i
+            self.sin_i = numpy.sin(i)
+            self.b = (self.a * numpy.cos(i) / self.rE()).decompose()
         else:
             self.b = b
+            cos_i = b * self.rE() / a
+            self.i = numpy.arccos(cos_i)
+            self.sin_i = numpy.sin(self.i)
 
     @property
     def b_max(self):
@@ -135,23 +141,6 @@ class SelfLensingSystem(object):
         The separation in space between acc and comp at phase
         """
         return self.r(self.Macc, phase) + self.r(self.Mcomp, phase)
-
-    @property
-    def psi(self):
-        return numpy.arcsin(
-            (self.b * self.rE()) / self.a
-        )  # The angular inclination of the source
-
-    @property
-    def sin_i(self):
-        """
-        sin of orbital inclination
-
-        As defined in Nicholas M. Sorabella et al., ‘Modeling Long-Term Variability in
-        Stellar-Compact Object Binary Systems for Mass Determinations’, The Astrophysical
-        Journal 936, no. 1 (August 2022): 63, https://doi.org/10.3847/1538-4357/ac82b7.
-        """
-        return numpy.sin((0.5 * numpy.pi) * units.rad - self.psi)
 
     @property
     def tau_eff(self):
