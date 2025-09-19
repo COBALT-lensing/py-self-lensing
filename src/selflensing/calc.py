@@ -110,14 +110,23 @@ def estimate_porb(tau_eff, min_mag, max_mag, Rcomp):
     return Porb
 
 
-def eliminate_times(porb_ranges, tau_eff, times):
+def eliminate_times(porb_ranges, tau_eff, times, aliases=True):
     """
     Eliminates tau_eff days around each time from the given porb_ranges.
     - porb_ranges: A list of time ranges (list of time quantity tuples).
     - tau_eff: A time quantity.
     - times: A single time quantity list.
     """
-    return eliminate_ranges(porb_ranges, extend_times(times, tau_eff / 2))
+    if aliases:
+        new_times = []
+        for t in times:
+            new_times.append(t)
+            new_times.extend(calc_aliases(t))
+        times = new_times
+    return eliminate_ranges(
+        porb_ranges,
+        extend_times(times, tau_eff / 2),
+    )
 
 
 def eliminate_ranges(porb_ranges, times):
@@ -152,3 +161,7 @@ def extend_ranges(ranges, delta):
 
 def extend_times(times, delta):
     return [(time - delta, time + delta) for time in times]
+
+
+def calc_aliases(p):
+    return p / numpy.arange(1, p.value)
