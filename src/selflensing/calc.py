@@ -123,7 +123,12 @@ def estimate_porb(tau_eff, min_mag, max_mag, Rcomp):
     for i, (_a_min, _a_max, _rE, _b) in enumerate(zip(a_min, a_max, rE, b)):
         print(f"\r{i} / {total}", end="")
         # print(_a_min, _a_max, _rE, _b)
-        a_samples = numpy.linspace(_a_min, _a_max, PDIST_SAMPLES)
+        a_samples = (
+            numpy.logspace(
+                numpy.log10(_a_min.value), numpy.log10(_a_max.value), PDIST_SAMPLES
+            )
+            * _a_min.unit
+        )
         mass_samples = calc_mass(_rE, a_samples)
         new_pdist = lens_mass_pdist(mass_samples)
         pdist = numpy.append(pdist, new_pdist)
