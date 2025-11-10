@@ -231,7 +231,7 @@ class SelfLensingLightcurveGenerator(FlatLightcurveGenerator):
     def integrated_witt_mao_flux_array(self):
         return super().flux_array * numpy.array(
             rustlens.integrated_witt_mao_magnification(
-                self.lensing_system.time_to_l(self.time_offsets),
+                self.lensing_system.time_to_b(self.time_offsets),
                 self.lensing_system.rE().to(units.m).value,
                 self.lensing_system.Rcomp.to(units.m).value,
             )
@@ -241,7 +241,7 @@ class SelfLensingLightcurveGenerator(FlatLightcurveGenerator):
     def witt_mao_flux_array(self):
         return super().flux_array * numpy.array(
             rustlens.witt_mao_magnification(
-                self.lensing_system.time_to_l(self.time_offsets),
+                self.lensing_system.time_to_b(self.time_offsets),
                 self.lensing_system.rE().to(units.m).value,
                 self.lensing_system.Rcomp.to(units.m).value,
             )

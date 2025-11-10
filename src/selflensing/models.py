@@ -119,6 +119,9 @@ class SelfLensingSystem(object):
             self.b_source.value,
         )
 
+    def phase_to_b(self, phase):
+        return self.phase_to_l(phase) / (self.rE() / self.Rcomp)
+
     @property
     @units.quantity_input
     def porb(self) -> units.day:
@@ -175,6 +178,9 @@ class SelfLensingSystem(object):
 
     def time_to_l(self, time):
         return self.phase_to_l(self.time_to_phase(time))
+
+    def time_to_b(self, time):
+        return self.phase_to_b(self.time_to_phase(time))
 
     @units.quantity_input
     def time_to_phase(self, time: units.day) -> units.rad:
