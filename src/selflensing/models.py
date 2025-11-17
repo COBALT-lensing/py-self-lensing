@@ -84,7 +84,7 @@ class SelfLensingSystem(object):
         Astronomical Society 507, no. 1 (11 October 2021): 374–84.
         https://doi.org/10.1093/mnras/stab2135.
         """
-        return 1 + self.Rcomp / self.rE()
+        return (1 + self.Rcomp / self.rE()).decompose()
 
     @property
     def b_source(self):
