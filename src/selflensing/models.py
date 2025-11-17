@@ -17,7 +17,7 @@ class SelfLensingSystem(object):
     DEFAULT_TEFF = 5000 * units.K
     DEFAULT_PERIAPSIS = 0 * units.rad
     DEFAULT_E = 0 * units.dimensionless_unscaled
-    DEFAULT_B = 0 * units.dimensionless_unscaled
+    DEFAULT_I = 0 * units.rad
 
     @units.quantity_input
     def __init__(
@@ -26,11 +26,11 @@ class SelfLensingSystem(object):
         Mcomp: units.kg,
         Rcomp: units.m,
         a: units.m = None,
-        b: units.dimensionless_unscaled = DEFAULT_B,  # type: ignore
+        # b: units.dimensionless_unscaled = DEFAULT_B,  # type: ignore
         Teff: units.K = DEFAULT_TEFF,
         e: units.dimensionless_unscaled = DEFAULT_E,  # type: ignore
         periapsis_phase: units.rad = DEFAULT_PERIAPSIS,
-        i: units.deg = None,
+        i: units.deg = DEFAULT_I,
         Porb: units.second = None,
     ):
         if a is None and Porb is None:
@@ -47,10 +47,7 @@ class SelfLensingSystem(object):
         self.Teff = Teff.to(self.param_units["Teff"])
         self.e = e
         self.periapsis_phase = periapsis_phase.to(self.param_units["periapsis_phase"])
-        if i is not None:
-            self.i = i
-        else:
-            self.b = b
+        self.i = i
 
     @property
     def b(self):
@@ -58,11 +55,12 @@ class SelfLensingSystem(object):
 
     @b.setter
     def b(self, b):
+        raise NotImplementedError
         # Calculate as per Wiktorowicz+2021
-        self._b = b
-        cos_i = (b * self.rE() / self.a).decompose()
-        self._i = numpy.arccos(cos_i)
-        self.sin_i = numpy.sin(self._i)
+        # self._b = b
+        # cos_i = (b * self.rE() / self.a).decompose()
+        # self._i = numpy.arccos(cos_i)
+        # self.sin_i = numpy.sin(self._i)
 
     @property
     def i(self):
@@ -142,7 +140,8 @@ class SelfLensingSystem(object):
 
     def rE(self, phase=0):
         return numpy.sqrt(
-            (4 * constants.G * self.Macc * self.r_sep(phase)) / constants.c**2
+            (4 * constants.G * self.Macc * self.r_sep(phase) * self.sin_i)
+            / constants.c**2
         ).to(units.R_sun)
 
     @property
