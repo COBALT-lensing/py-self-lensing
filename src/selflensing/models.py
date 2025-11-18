@@ -6,7 +6,7 @@ from astropy import units, constants
 class SelfLensingSystem(object):
     param_units = {
         "a": units.au,
-        "b": units.dimensionless_unscaled,
+        "i": units.rad,
         "Macc": units.M_sun,
         "Rcomp": units.R_sun,
         "Mcomp": units.M_sun,

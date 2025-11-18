@@ -16,7 +16,7 @@ warnings.filterwarnings("ignore", module="erfa.core")
 
 FIT_LIMITS = {
     "a": (0.01, 200),
-    "b": (0, 10),
+    "i": (0, 0.5 * numpy.pi),
     "Macc": (0.5, 50),
     "Rcomp": (0.1, 1000),
     "Mcomp": (0.1, 200),
@@ -51,12 +51,12 @@ def combined_chi2(
     weight_lc_peak=False,
     model_sls=None,
 ):
-    a, b, Macc, e, periapsis_phase = params
+    a, i, Macc, e, periapsis_phase = params
 
     if a < FIT_LIMITS["a"][0] or a > FIT_LIMITS["a"][1]:
         return -numpy.inf
 
-    if b < FIT_LIMITS["b"][0] or b > FIT_LIMITS["b"][1]:
+    if i < FIT_LIMITS["i"][0] or i > FIT_LIMITS["i"][1]:
         return -numpy.inf
 
     if Macc < FIT_LIMITS["Macc"][0] or Macc > FIT_LIMITS["Macc"][1]:
@@ -76,12 +76,12 @@ def combined_chi2(
     Macc = Macc * SelfLensingSystem.param_units["Macc"]
     e = e * SelfLensingSystem.param_units["e"]
     periapsis_phase = periapsis_phase * SelfLensingSystem.param_units["periapsis_phase"]
-    b = b * SelfLensingSystem.param_units["b"]
+    i = i * SelfLensingSystem.param_units["i"]
 
     if model_sls is None:
         model_sls = SelfLensingSystem(
             a=a,
-            b=b,
+            i=i,
             Macc=Macc,
             Mcomp=Mcomp,
             Rcomp=Rcomp,
@@ -90,7 +90,7 @@ def combined_chi2(
         )
     else:
         model_sls.a = a
-        model_sls.b = b
+        model_sls.i = i
         model_sls.Macc = Macc
         model_sls.Mcomp = Mcomp
         model_sls.Rcomp = Rcomp
@@ -109,7 +109,7 @@ def combined_chi2(
     if tau_eff is not None:
         if numpy.isnan(model_sls.tau_eff):
             # If the impact parameter is too large, then there is no crossing
-            # We only enforce this is tau_eff has been provided, so that we
+            # We only enforce this if tau_eff has been provided, so that we
             # can still fit ellipsoidal variations and Doppler boosting when
             # there is no lensing.
             return -numpy.inf
@@ -178,7 +178,7 @@ def self_lensing_system_from_fit(
     p0 = [
         numpy.random.uniform(bounds[0], bounds[1], nwalkers)
         for bounds in (
-            FIT_LIMITS["b"],
+            FIT_LIMITS["i"],
             FIT_LIMITS["Macc"],
             FIT_LIMITS["e"],
             FIT_LIMITS["periapsis_phase"],
@@ -277,12 +277,12 @@ def self_lensing_system_from_fit(
     flat_samples = sampler.get_chain(flat=True, discard=burn)
     res = flat_samples[numpy.argmax(sampler.get_log_prob(flat=True, discard=burn))]
 
-    out_a, out_b, out_Macc, out_e, out_periapsis_phase = res
+    out_a, out_i, out_Macc, out_e, out_periapsis_phase = res
 
     return (
         SelfLensingSystem(
             a=out_a * SelfLensingSystem.param_units["a"],
-            b=out_b * SelfLensingSystem.param_units["b"],
+            i=out_i * SelfLensingSystem.param_units["i"],
             Macc=out_Macc * SelfLensingSystem.param_units["Macc"],
             Rcomp=Rcomp,
             Mcomp=Mcomp,
