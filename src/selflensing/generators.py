@@ -215,11 +215,20 @@ class SelfLensingLightcurveGenerator(FlatLightcurveGenerator):
 
     @property
     def flux_array(self):
-        return getattr(self, self.lensing_methods[self.lensing_method])
+        flux_array = super().flux_array
+        rE = self.lensing_system.rE()
+        if (
+            rE is not None
+            and not numpy.isinf(rE)
+            and not numpy.isnan(rE)
+            and not numpy.isnan(self.lensing_system.b)
+        ):
+            flux_array *= getattr(self, self.lensing_methods[self.lensing_method])
+        return flux_array
 
     @property
     def heyrovsky_flux_array(self):
-        return super().flux_array * numpy.array(
+        return numpy.array(
             rustlens.integrated_heyrovsky_magnification(
                 self.lensing_system.time_to_l(self.time_offsets),
                 self.lensing_system.rE().to(units.m).value,
@@ -229,7 +238,7 @@ class SelfLensingLightcurveGenerator(FlatLightcurveGenerator):
 
     @property
     def integrated_witt_mao_flux_array(self):
-        return super().flux_array * numpy.array(
+        return numpy.array(
             rustlens.integrated_witt_mao_magnification(
                 self.lensing_system.time_to_b(self.time_offsets),
                 self.lensing_system.rE().to(units.m).value,
@@ -239,7 +248,7 @@ class SelfLensingLightcurveGenerator(FlatLightcurveGenerator):
 
     @property
     def witt_mao_flux_array(self):
-        return super().flux_array * numpy.array(
+        return numpy.array(
             rustlens.witt_mao_magnification(
                 self.lensing_system.time_to_b(self.time_offsets),
                 self.lensing_system.rE().to(units.m).value,
