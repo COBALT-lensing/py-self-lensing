@@ -107,7 +107,7 @@ def combined_chi2(
 
     tau_eff_err = 0
     if tau_eff is not None:
-        if numpy.isnan(model_sls.tau_eff):
+        if model_sls.b > model_sls.b_max or numpy.isnan(model_sls.tau_eff):
             # If the impact parameter is too large, then there is no crossing
             # We only enforce this if tau_eff has been provided, so that we
             # can still fit ellipsoidal variations and Doppler boosting when
