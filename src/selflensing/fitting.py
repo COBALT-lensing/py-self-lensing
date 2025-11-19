@@ -16,7 +16,7 @@ warnings.filterwarnings("ignore", module="erfa.core")
 
 FIT_LIMITS = {
     "a": (0.01, 200),
-    "i": (0, 0.5 * numpy.pi),
+    "i": (1.3, 0.5 * numpy.pi),
     "Macc": (0.5, 50),
     "Rcomp": (0.1, 1000),
     "Mcomp": (0.1, 200),
