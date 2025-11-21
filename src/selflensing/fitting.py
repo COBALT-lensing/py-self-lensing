@@ -16,11 +16,8 @@ warnings.filterwarnings("ignore", module="erfa.core")
 
 FIT_LIMITS = {
     "a": (0.01, 200),
-    "i": (1.3, 0.5 * numpy.pi),
+    "i": (1.4, 0.5 * numpy.pi),
     "Macc": (0.5, 50),
-    "Rcomp": (0.1, 1000),
-    "Mcomp": (0.1, 200),
-    "Teff": (100, 100000),
     "e": (0, 1),
     "periapsis_phase": (0, 2 * numpy.pi),
 }
@@ -49,6 +46,8 @@ def combined_chi2(
     detected_periods,
     lensing_method,
     weight_lc_peak=False,
+    period_min=None,
+    period_max=None,
     model_sls=None,
 ):
     a, i, Macc, e, periapsis_phase = params
@@ -90,12 +89,18 @@ def combined_chi2(
         )
     else:
         model_sls.a = a
-        model_sls.i = i
         model_sls.Macc = Macc
         model_sls.Mcomp = Mcomp
+        # Must set i after setting the masses to correctly pre-calc b
+        model_sls.i = i
         model_sls.Rcomp = Rcomp
         model_sls.e = e
         model_sls.periapsis_phase = periapsis_phase
+
+    if period_min is not None and model_sls.porb < period_min:
+        return -numpy.inf
+    if period_max is not None and model_sls.porb > period_max:
+        return -numpy.inf
 
     period_err = 0
     if len(detected_periods) > 0:
@@ -107,23 +112,25 @@ def combined_chi2(
 
     tau_eff_err = 0
     if tau_eff is not None:
-        if model_sls.b > model_sls.b_max or numpy.isnan(model_sls.tau_eff):
+        if numpy.isnan(model_sls.tau_eff):
             # If the impact parameter is too large, then there is no crossing
             # We only enforce this if tau_eff has been provided, so that we
             # can still fit ellipsoidal variations and Doppler boosting when
             # there is no lensing.
             return -numpy.inf
         tau_eff_err = gauss_lnprior(
-            model_sls.tau_eff.to(units.day).value, tau_eff.to(units.day).value
+            model_sls.tau_eff.to(units.day).value,
+            tau_eff.to(units.day).value,
+            tau_eff.to(units.day).value / 100,
         )
 
     rv_chi2 = 0
     if observed_rv is not None:
         rv_gen = RVGenerator(model_sls, times=rv_times, peak_time=peak_time)
         rv_chi2 = chi2(
-            observed_rv.value,
+            observed_rv.to(units.m / units.s).value,
             observed_rv_err.to(units.m / units.s).value,
-            rv_gen.rv.value,
+            rv_gen.rv.to(units.m / units.s).value,
         )
 
     lc_chi2 = 0
@@ -163,6 +170,10 @@ def self_lensing_system_from_fit(
     Teff: units.K = SelfLensingSystem.DEFAULT_TEFF,
     tau_eff: units.day = None,
     false_alarm_probability=0.1,
+    detect_periods=False,
+    periods=[],
+    period_min: units.day = None,
+    period_max: units.day = None,
     weight_lc_peak=False,
     nwalkers=100,
     nsteps=5000,
@@ -197,34 +208,37 @@ def self_lensing_system_from_fit(
 
     MAX_PERIOD_THRESH = 0.9
 
-    lc_baseline = 0
     detected_lc_periods = []
-    if lc_times is not None:
-        lc_baseline = lc_times[-1].jd - lc_times[0].jd
-        detected_lc_periods = get_periods(
-            observed_lc, lc_times.jd, false_alarm_probability
-        )
-
-    if len(detected_lc_periods) > 0:
-        detected_lc_periods = detected_lc_periods[
-            detected_lc_periods < MAX_PERIOD_THRESH * lc_baseline
-        ]
-
-    rv_baseline = 0
     detected_rv_periods = []
-    if rv_times is not None:
-        rv_baseline = rv_times[-1].jd - rv_times[0].jd
-        detected_rv_periods = get_periods(
-            observed_rv, rv_times.jd, false_alarm_probability
-        )
 
-        if len(detected_rv_periods) > 0:
-            detected_rv_periods = detected_rv_periods[
-                detected_rv_periods < MAX_PERIOD_THRESH * rv_baseline
+    if detect_periods:
+        lc_baseline = 0
+        if lc_times is not None:
+            lc_baseline = lc_times[-1].jd - lc_times[0].jd
+            detected_lc_periods = get_periods(
+                observed_lc, lc_times.jd, false_alarm_probability
+            )
+
+        if len(detected_lc_periods) > 0:
+            detected_lc_periods = detected_lc_periods[
+                detected_lc_periods < MAX_PERIOD_THRESH * lc_baseline
             ]
 
-    detected_periods = numpy.concatenate([detected_lc_periods, detected_rv_periods])
+        rv_baseline = 0
+        if rv_times is not None:
+            rv_baseline = rv_times[-1].jd - rv_times[0].jd
+            detected_rv_periods = get_periods(
+                observed_rv, rv_times.jd, false_alarm_probability
+            )
 
+            if len(detected_rv_periods) > 0:
+                detected_rv_periods = detected_rv_periods[
+                    detected_rv_periods < MAX_PERIOD_THRESH * rv_baseline
+                ]
+
+    detected_periods = numpy.concatenate(
+        [periods, detected_lc_periods, detected_rv_periods]
+    )
     close_pool = False
     if pool is None:
         from multiprocessing import Pool
@@ -253,6 +267,8 @@ def self_lensing_system_from_fit(
                 detected_periods,
                 lensing_method,
                 weight_lc_peak,
+                period_min,
+                period_max,
                 SelfLensingSystem(
                     0 * SelfLensingSystem.param_units["Macc"],
                     0 * SelfLensingSystem.param_units["Mcomp"],

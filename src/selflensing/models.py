@@ -30,7 +30,7 @@ class SelfLensingSystem(object):
         Teff: units.K = DEFAULT_TEFF,
         e: units.dimensionless_unscaled = DEFAULT_E,  # type: ignore
         periapsis_phase: units.rad = DEFAULT_PERIAPSIS,
-        i: units.deg = DEFAULT_I,
+        i: units.rad = DEFAULT_I,
         Porb: units.second = None,
     ):
         if a is None and Porb is None:
@@ -56,11 +56,6 @@ class SelfLensingSystem(object):
     @b.setter
     def b(self, b):
         raise NotImplementedError
-        # Calculate as per Wiktorowicz+2021
-        # self._b = b
-        # cos_i = (b * self.rE() / self.a).decompose()
-        # self._i = numpy.arccos(cos_i)
-        # self.sin_i = numpy.sin(self._i)
 
     @property
     def i(self):
@@ -68,9 +63,9 @@ class SelfLensingSystem(object):
 
     @i.setter
     def i(self, i):
-        # Calculate as per Wiktorowicz+2021
         self._i = i
         self.sin_i = numpy.sin(i)
+        # Calculate as per Wiktorowicz+2021
         self._b = (self.a * numpy.cos(i) / self.rE()).decompose()
 
     @property
