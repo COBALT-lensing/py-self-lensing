@@ -13,11 +13,13 @@ class SelfLensingSystem(object):
         "Teff": units.K,
         "e": units.dimensionless_unscaled,
         "periapsis_phase": units.rad,
+        "d": units.kpc,
     }
     DEFAULT_TEFF = 5000 * units.K
     DEFAULT_PERIAPSIS = 0 * units.rad
     DEFAULT_E = 0 * units.dimensionless_unscaled
     DEFAULT_I = 0 * units.rad
+    DEFAULT_D = 1 * units.kpc
 
     @units.quantity_input
     def __init__(
@@ -32,6 +34,7 @@ class SelfLensingSystem(object):
         periapsis_phase: units.rad = DEFAULT_PERIAPSIS,
         i: units.rad = DEFAULT_I,
         Porb: units.second = None,
+        d: units.kpc = DEFAULT_D,
     ):
         if a is None and Porb is None:
             raise ValueError("You must provide one of a or Porb")
@@ -47,7 +50,8 @@ class SelfLensingSystem(object):
         self.Teff = Teff.to(self.param_units["Teff"])
         self.e = e
         self.periapsis_phase = periapsis_phase.to(self.param_units["periapsis_phase"])
-        self.i = i
+        self.i = i.to(self.param_units["i"])
+        self.d = d.to(self.param_units["d"])
 
     @property
     def b(self):

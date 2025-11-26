@@ -5,6 +5,8 @@ import rustlens
 from astropy.timeseries import TimeSeries
 from astropy import units, constants
 
+from .gp import TESSGP
+
 
 class GeneratorBase(object):
     DEFAULT_BINS = 100
@@ -76,7 +78,12 @@ class FlatLightcurveGenerator(GeneratorBase):
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
-        self.baseline = baseline
+        if baseline == "TESS":
+            self.baseline = TESSGP(self.lensing_system).generate_noise(
+                self.time_offsets
+            )
+        else:
+            self.baseline = baseline
 
     def __str__(self):
         return "Generated Flat Light Curve"
