@@ -1,3 +1,5 @@
+from functools import cached_property
+
 import numpy as np
 import jax.numpy as jnp
 import jax
@@ -18,13 +20,21 @@ from . import (
 PWD = os.path.dirname(os.path.abspath(__file__))
 
 
-class TESSGP(object):
+class BaseGP(object):
+    pass
+
+
+class TESSGP(BaseGP):
     csv_paths = [
         f"{PWD}/data/Disk_f40_TESS_output.csv.gz",
         f"{PWD}/data/Bulge_f40_TESS_output.csv.gz",
     ]
+    kernel_type = "GS"
+    mu_bounds = [(0.0, 7.0)]  # log10 μ
+    cadence_s = 600.0
+    use_kde_flag = True
 
-    def __init__(self, sls):
+    def __init__(self, sls, lc_times=None, observed_lc=None):
         self.sls = sls
 
         test_Mag, noise_measure = ff.conv_mass_to_mag(
@@ -44,6 +54,11 @@ class TESSGP(object):
         self.seed = int(time.time()) % (
             2**32
         )  # Generate a seed based on the current time
+
+        if lc_times is not None:
+            self.lc_times = lc_times
+        if observed_lc is not None:
+            self.observed_lc = observed_lc
 
     def generate_noise(self, times):
         # --- build GS kernel hypers directly (physics + μ bands) ---
@@ -74,7 +89,7 @@ class TESSGP(object):
         print("theta=", noise_only_theta)
         nhyp = len(gs_hypers)
 
-        kernel_fn = lgp.make_kernel_fn("GS")
+        kernel_fn = lgp.make_kernel_fn(self.kernel_type)
         noise_gp = lgp.build_model_additive(
             theta=noise_only_theta,
             nhyp=nhyp,
@@ -86,30 +101,15 @@ class TESSGP(object):
 
         return noise_gp.sample(jax.random.key(self.seed))
 
-    def fit(self, lc_times, observed_lc):
-        # Segment characteristics
+    @property
+    def kernel_bounds(self):
         T_days = 27.0
-        cadence_s = 600.0
         T_seconds = T_days * 86400.0
         nu_res = 1.0 / T_seconds  # ~4.3e-7 Hz
-        nu_nyq = 1.0 / (2.0 * cadence_s)  # ~8.33e-4 Hz
+        nu_nyq = 1.0 / (2.0 * self.cadence_s)  # ~8.33e-4 Hz
 
         log10_nu_res = float(np.log10(nu_res))  # ~ -6.37
         log10_nu_nyq = float(np.log10(nu_nyq))  # ~ -3.08
-        LOG10_2 = float(np.log10(2.0))
-
-        # ---------------------------
-        # Lens + μ (unchanged units)
-        # ---------------------------
-        lens_bounds = [
-            # (0.1, 20.0),                 # M_s [M_sun]  (MS assumption)
-            (self.sls.Mcomp.value * 0.9, self.sls.Mcomp.value * 1.1),
-            (1.4, 20.0),  # M_co [M_sun]
-            (5.0, 8.0),  # log10 P_orb [s]  (~1.16 d to ~31.7 yr)
-            (3 * np.pi / 8, 5 * np.pi / 8),  # inclination [rad]
-            (0.0, 2 * np.pi),  # phase offset [rad]
-        ]
-        mu_bounds = [(0.0, 7.0)]  # log10 μ
 
         # ---------------------------------------------
         # Kernel hyperparameter bounds (Hz & seconds)
@@ -118,7 +118,7 @@ class TESSGP(object):
         # E: [log10(nu_ellip_Hz),              log10(sigma)]  with nu_ellip = 2/P
         # F: [log10(tau_d [s]),                log10(sigma)]
         # ---------------------------------------------
-        kernel_bounds_dict = {
+        return {
             # Granulation frequency within observable band (resolution .. Nyquist)
             # Note: MS granulation typically near/above Nyquist at 10-min cadence; this still lets data push to the cap.
             "G": [(log10_nu_res, log10_nu_nyq), (-6.0, 2.0)],
@@ -136,99 +136,130 @@ class TESSGP(object):
             ],  # log10 τ_d ∈ [10^2, 10^6.5] s; log10 sigma flexible
         }
 
-        # ---- 0) Data ----
-        T = jnp.asarray(lc_times, dtype=float)
-        y = jnp.asarray(observed_lc, dtype=float)  # Using the lensing light curve
+    @property
+    def lens_bounds(self):
+        return [
+            # (0.1, 20.0),                 # M_s [M_sun]  (MS assumption)
+            (self.sls.Mcomp.value * 0.9, self.sls.Mcomp.value * 1.1),
+            (1.4, 20.0),  # M_co [M_sun]
+            (5.0, 8.0),  # log10 P_orb [s]  (~1.16 d to ~31.7 yr)
+            (3 * np.pi / 8, 5 * np.pi / 8),  # inclination [rad]
+            (0.0, 2 * np.pi),  # phase offset [rad]
+        ]
 
-        # --- New KDE Check: Try to build it directly ---
-        # try:
-        #     print("Attempting to build KDE output tuple...")
-        #     # This line will raise a NameError if any variable is missing
-        #     kde_output_tuple = (kde_obj_3d, inv_stds_3d, grid_Ms, grid_Mco, grid_logP, log_pdf_3d)
-        #     use_kde_flag = True
-        #     print("Successfully built KDE tuple. KDE is ON.")
+    @cached_property
+    def full_bounds(self):
+        full_bounds = ps.build_combined_bounds(
+            kernel_type=self.kernel_type,
+            kernel_bounds_dict=self.kernel_bounds,
+            lens_bounds=self.lens_bounds,
+            mu_bounds=self.mu_bounds,
+            include_lens_mean=1,
+        )
+        return tuple(map(tuple, full_bounds))
 
-        # except NameError as e:
-        #     print(f"A required KDE variable is missing: {e}")
-        #     print("   Please go back and re-run Cell [12] successfully to enable the KDE.")
-        #     kde_output_tuple = None
-        #     use_kde_flag = False
-
-        kde_output_tuple = ps.build_kde_3d(
+    @cached_property
+    def kde_output_tuple(self):
+        return ps.build_kde_3d(
             csv_paths=self.csv_paths,
             bandwidth=None,
             grid_sizes=(50, 50, 50),
             expand_frac=0.05,
         )
-        use_kde_flag = True
 
-        # ---- 1) Bounds for FULL GS + Lensing model ----
-        print("Building bounds for 'GS + Lensing' model...")
-        full_bounds = ps.build_combined_bounds(
-            kernel_type="GS",
-            kernel_bounds_dict=kernel_bounds_dict,
-            lens_bounds=lens_bounds,
-            mu_bounds=mu_bounds,
-            include_lens_mean=1,
-        )
-        full_bounds = tuple(map(tuple, full_bounds))
+    @cached_property
+    def nhyp(self):
+        return mcf.count_nhyp(self.kernel_type)
 
-        # ---- 2) Derive sizes ----
-        nhyp = mcf.count_nhyp("GS")
+    @property
+    def ndim(self):
         n_lens_params = 5
-        ndim = nhyp + n_lens_params + 1
-        print(
-            f"Model: 'GS + Lensing'. nhyp={nhyp}, n_lens_params={n_lens_params}, ndim={ndim}"
-        )
+        return self.nhyp + n_lens_params + 1
 
-        # ---- 3) Walker init ----
-        nwalkers = 4 * ndim
-        print(f"Initializing {nwalkers} walkers (Option B: Prior-informed)...")
-        p0 = mcf.init_walkers(
-            n_walkers=nwalkers,
-            param_bounds=full_bounds,
-            kernel_type="GS",
-            include_lens_mean=True,
+    @property
+    def nwalkers(self):
+        return 4 * self.ndim
+
+    @cached_property
+    def p0_full(self):
+        return mcf.init_walkers(
+            n_walkers=self.nwalkers,
+            param_bounds=self.full_bounds,
+            kernel_type=self.kernel_type,
+            include_lens_mean=False,
             # --- KDE Changes ---
-            use_kde=use_kde_flag,  # <<< Uses the flag from our check
-            kde3d_pack=kde_output_tuple,  # <<< Passes the 6-tuple
+            use_kde=self.use_kde_flag,  # <<< Uses the flag from our check
+            kde3d_pack=self.kde_output_tuple,  # <<< Passes the 6-tuple
             # --- Physical prior enabled ---
             phys_scale=True,
-            T=np.asarray(T),
-            y=np.asarray(y),
-            cadence_s=cadence_s,
+            T=np.asarray(self.T),
+            y=np.asarray(self.y),
+            cadence_s=self.cadence_s,
         )
 
-        # ---- 4) Vectorized log-prob and sampler ----
-        print("Building JAX-compiled log-probability function...")
+    @property
+    def p0(self):
+        return self.p0_full[: self.nhyp] + self.p0_full[-1:]
 
-        logprob = mcf.make_emcee_vectorized_logprob(
-            kernel_type="GS",
-            nhyp=nhyp,
+    def expand_p0(self, p0):
+        return (
+            p0[: self.nhyp]
+            + [
+                self.sls.Mcomp.value,
+                self.sls.Macc.value,
+                np.log10(self.sls.Porb.value),
+                self.sls.i.value,
+                self.sls.periapsis_phase.value,
+            ]
+            + p0[-1:]
+        )
+
+    @cached_property
+    def logprob(self):
+        return mcf.make_emcee_vectorized_logprob(
+            kernel_type=self.kernel_type,
+            nhyp=self.nhyp,
             noise_measure=float(self.noise_measure),
-            param_bounds=full_bounds,
+            param_bounds=self.full_bounds,
             # --- KDE Changes ---
-            kde3d_args=kde_output_tuple,  # <<< Pass the 6-tuple
+            kde3d_args=self.kde_output_tuple,  # <<< Pass the 6-tuple
             # --- Physical prior enabled ---
             phys_scale=True,
-            include_lens_mean=True,
+            include_lens_mean=False,
         )
 
-        # --- Sampler Creation and Run ---
-        sampler_lens = emcee.EnsembleSampler(  # <<< Renamed to sampler_lens
-            nwalkers=nwalkers,
-            ndim=ndim,
-            log_prob_fn=logprob,
+    @property
+    def lc_times(self):
+        return self._lc_times
+
+    @lc_times.setter
+    def lc_times(self, v):
+        self._lc_times = v
+        self.T = jnp.asarray(v, dtype=float)
+
+    @property
+    def observed_lc(self):
+        return self._observed_lc
+
+    @observed_lc.setter
+    def observed_lc(self, v):
+        self._observed_lc = v
+        self.y = jnp.asarray(v, dtype=float)
+
+    def fit(self):
+        sampler_lens = emcee.EnsembleSampler(
+            nwalkers=self.nwalkers,
+            ndim=self.ndim,
+            log_prob_fn=self.logprob,
             vectorize=True,
-            args=(T, y),
+            args=(self.T, self.y),
         )
 
-        # ---- 5) Run burn-in + production ----
-        nburn, nprod = 500, 2000  # Keep these shorter for testing
-        print(f"Running burn-in ({nburn} steps)...")
-        p0, _, _ = sampler_lens.run_mcmc(p0, nburn, progress=True)
+        nburn, nprod = 500, 2000
+        # print(f"Running burn-in ({nburn} steps)...")
+        p0, _, _ = sampler_lens.run_mcmc(self.p0_full, nburn, progress=True)
         sampler_lens.reset()
-        print(f"Running production ({nprod} steps)...")
+        # print(f"Running production ({nprod} steps)...")
         sampler_lens.run_mcmc(p0, nprod, progress=True)
 
         # ---- 6) Summaries ----
@@ -236,35 +267,16 @@ class TESSGP(object):
         flat_chain_lens = sampler_lens.get_chain(flat=True)
         logp_lens = sampler_lens.get_log_prob(flat=True)
 
-        print("\n--- MCMC Run Complete ---")
-        print(
-            f"Final acceptance fraction: {np.mean(sampler_lens.acceptance_fraction):.3f}"
-        )
-        print("Chain shape:", flat_chain_lens.shape)
-        print(
-            f"logp mean/median: {np.mean(logp_lens):.2f} / {np.median(logp_lens):.2f}"
-        )
+        # print("\n--- MCMC Run Complete ---")
+        # print(
+        #     f"Final acceptance fraction: {np.mean(sampler_lens.acceptance_fraction):.3f}"
+        # )
+        # print("Chain shape:", flat_chain_lens.shape)
+        # print(
+        #     f"logp mean/median: {np.mean(logp_lens):.2f} / {np.median(logp_lens):.2f}"
+        # )
 
         # Unpack a quick MAP-ish estimate
         best_idx = np.argmax(logp_lens)
         theta_hat = flat_chain_lens[best_idx]
         return theta_hat, sampler_lens
-        # # --- Updated printout for lensing model ---
-        # print("\nBest θ (GS + Lensing + logμ):")
-        # print(f"  G: log10 ν_g, log10 σ_g  = {theta_hat[0:2]}")
-        # print(f"  S: log10 ν_s, Q, log10 σ = {theta_hat[2:5]}")
-        # print(f"  Lens: Ms, Mco, logP, inc, delta = {theta_hat[5:10]}")
-        # print(f"  log10 μ                  = {theta_hat[10]:.4f}")
-
-        # # (Optional) sanity check:
-        # print("\nRe-computing log-likelihood at best-fit θ...")
-        # kernel_fn = lgp.make_kernel_fn("GS")
-        # gp_hat = lgp.build_model_additive(
-        #     theta=jnp.asarray(theta_hat),
-        #     nhyp=nhyp,
-        #     kernel_fn=kernel_fn,
-        #     T=T,
-        #     include_lens_mean=1,
-        #     noise_measure=float(self.noise_measure),
-        # )
-        # print(f"log L(θ̂): {float(gp_hat.log_probability(y)):.2f}")
