@@ -43,6 +43,7 @@ def combined_chi2(
     lc_times,
     observed_lc,
     observed_lc_err,
+    gp_model,
     detected_periods,
     lensing_method,
     weight_lc_peak=False,
@@ -149,7 +150,13 @@ def combined_chi2(
             observed_lc.value, observed_lc_err.value, lc_gen.flux_array.value
         )
 
-    return rv_chi2 + lc_chi2 + period_err + tau_eff_err
+    gp_logprob = 0
+    if gp_model is not None:
+        gp_logprob = gp_model.logprob(
+            gp_model.expand_p0(params[gp_model.nhyp + 1 :]), gp_model.T, gp_model.y
+        )
+
+    return rv_chi2 + lc_chi2 + period_err + tau_eff_err + gp_logprob
 
 
 def chi2(obs, obs_err, model):
@@ -167,6 +174,7 @@ def self_lensing_system_from_fit(
     lc_times=None,
     observed_lc=None,
     observed_lc_err=None,
+    gp_model=None,
     Teff: units.K = SelfLensingSystem.DEFAULT_TEFF,
     tau_eff: units.day = None,
     false_alarm_probability=0.1,
@@ -203,6 +211,9 @@ def self_lensing_system_from_fit(
     )
 
     p0 = list(zip(*p0))
+
+    if gp_model is not None:
+        p0 += gp_model.p0
 
     from .lombscargle import get_periods
 
@@ -264,6 +275,7 @@ def self_lensing_system_from_fit(
                 lc_times,
                 observed_lc,
                 observed_lc_err,
+                gp_model,
                 detected_periods,
                 lensing_method,
                 weight_lc_peak,
