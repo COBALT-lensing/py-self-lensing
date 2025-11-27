@@ -23,7 +23,7 @@ LENS_MASS_DIST[1, 60] = 8
 LENS_MASS_DIST[1, 61] = 6
 LENS_MASS_DIST[1, 89] = 3
 LENS_MASS_DIST[1, 90] = 8
-LENS_MASS_DIST[1, 61] = 6
+LENS_MASS_DIST[1, 91] = 6
 # for n in range(15, 25):
 #     LENS_MASS_DIST[1, n] = 10
 
@@ -129,25 +129,34 @@ def estimate_porb(tau_eff, min_mag, max_mag, Rcomp):
             )
             * _a_min.unit
         )
+        # Rework lens_mass_pdist to use a differential density of the mass distribution, and to sample that distribution
+        # at given mass ranges (in other words just normalise the value, but actually it won't make a difference now since
+        # # the bins are all the smae width).
+        # Then use those samples to weight the calculated porbs.
+        # Then change the bin_prob calculation below to just sum the weighted porbs.
+        # Finally return a differential density distribution for the porbs.
         mass_samples = calc_mass(_rE, a_samples)
         new_pdist = lens_mass_pdist(mass_samples)
         pdist = numpy.append(pdist, new_pdist)
         porbs = numpy.append(porbs, calc_porb(a_samples, _b, _rE, Rcomp, tau_eff))
-    print(len(pdist), len(numpy.unique(pdist)), pdist[:100])
+    # print(len(pdist), len(numpy.unique(pdist)), pdist[:100])
+    print(porbs)
 
     porbs = porbs[~numpy.isnan(porbs)]
     porb_min_bin = numpy.floor(numpy.log10(numpy.min(porbs).value)) * porbs.unit
     porb_max_bin = numpy.ceil(numpy.log10(numpy.max(porbs).value)) * porbs.unit
     porb_bins = numpy.logspace(porb_min_bin.value, porb_max_bin.value, 100) * porbs.unit
-    bin_starts, bin_ends, bin_probs = [], [], []
+    bin_starts, bin_ends, bin_counts = [], [], []
 
     for start, end in zip(porb_bins[:-1], porb_bins[1:]):
         bin_filter = numpy.where((porbs < end) & (porbs >= start))[0]
-        bin_prob = numpy.sum(pdist[bin_filter]) - numpy.prod(pdist[bin_filter])
+        # bin_prob = numpy.sum(pdist[bin_filter]) - numpy.prod(pdist[bin_filter])
+        bin_count = numpy.sum(pdist[bin_filter])
         bin_starts.append(start)
         bin_ends.append(end)
-        bin_probs.append(bin_prob)
-    return bin_starts, bin_ends, bin_probs
+        bin_counts.append(bin_count)
+    bin_counts = list(numpy.array(bin_counts) / sum(bin_counts))
+    return bin_starts, bin_ends, bin_counts
 
 
 def eliminate_times(porb_ranges, tau_eff, times, aliases=True):
