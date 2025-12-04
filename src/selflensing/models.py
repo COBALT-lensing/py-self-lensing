@@ -1,6 +1,7 @@
-import numpy
+from quaxed import numpy
 
 from astropy import units, constants
+from unxt import Quantity
 
 
 class SelfLensingSystem(object):
@@ -44,14 +45,16 @@ class SelfLensingSystem(object):
             )
         self.a = a.to(self.param_units["a"])
 
-        self.Macc = Macc.to(self.param_units["Macc"])
-        self.Rcomp = Rcomp.to(self.param_units["Rcomp"])
-        self.Mcomp = Mcomp.to(self.param_units["Mcomp"])
-        self.Teff = Teff.to(self.param_units["Teff"])
-        self.e = e
-        self.periapsis_phase = periapsis_phase.to(self.param_units["periapsis_phase"])
-        self.i = i.to(self.param_units["i"])
-        self.d = d.to(self.param_units["d"])
+        self.Macc = Quantity.from_(Macc.to(self.param_units["Macc"]))
+        self.Rcomp = Quantity.from_(Rcomp.to(self.param_units["Rcomp"]))
+        self.Mcomp = Quantity.from_(Mcomp.to(self.param_units["Mcomp"]))
+        self.Teff = Quantity.from_(Teff.to(self.param_units["Teff"]))
+        self.e = Quantity.from_(e)
+        self.periapsis_phase = Quantity.from_(
+            periapsis_phase.to(self.param_units["periapsis_phase"])
+        )
+        self.i = Quantity.from_(i.to(self.param_units["i"]))
+        self.d = Quantity.from_(d.to(self.param_units["d"]))
 
     @property
     def b(self):
@@ -81,7 +84,7 @@ class SelfLensingSystem(object):
         Astronomical Society 507, no. 1 (11 October 2021): 374–84.
         https://doi.org/10.1093/mnras/stab2135.
         """
-        return (1 + self.Rcomp / self.rE()).decompose()
+        return (1 + self.Rcomp / self.rE()).decompose([])
 
     @property
     def b_source(self):
@@ -89,13 +92,14 @@ class SelfLensingSystem(object):
         The impact parameter in units of Rcomp (source radii). b_source=1 when the lens is at
         the edge of the stellar disk.
         """
-        return self.b * (self.rE() / self.Rcomp)
+        return (self.b * (self.rE() / self.Rcomp)).decompose([])
 
     @property
     def Mtot(self):
         return self.Macc + self.Mcomp
 
-    def phase_to_l(self, phase):
+    @units.quantity_input
+    def phase_to_l(self, phase: units.rad) -> float:
         """
         Given a phase angle, compute the distance of the lens from the centre of the disk.
 
@@ -103,32 +107,37 @@ class SelfLensingSystem(object):
         """
         phase_limit = 0.5 * numpy.pi * units.rad
         phase_upper_limit = 2 * numpy.pi * units.rad - phase_limit
-        if isinstance(phase, numpy.ndarray):
+        if isinstance(phase, numpy.ndarray) or phase.shape != tuple():
             phase[(phase > phase_limit) & (phase < phase_upper_limit)] = phase_limit
         elif phase > phase_limit and phase < phase_upper_limit:
             phase = 0.5 * numpy.pi * units.rad
-        return numpy.hypot(
-            numpy.abs(
-                self.r_sep(phase=phase).to(units.m)
-                * numpy.sin(phase)
-                / self.Rcomp.to(units.m)
-            ).value,
-            self.b_source.value,
+        return (
+            numpy.hypot(
+                numpy.abs(
+                    self.r_sep(phase=phase).to(units.m)
+                    * numpy.sin(phase)
+                    / self.Rcomp.to(units.m)
+                ),
+                self.b_source.value,
+            )
+            # .decompose([])
+            # .value
         )
 
-    def phase_to_b(self, phase):
-        return self.phase_to_l(phase) / (self.rE() / self.Rcomp)
+    @units.quantity_input
+    def phase_to_b(self, phase: units.rad) -> float:
+        return self.phase_to_l(phase) / (self.rE() / self.Rcomp).decompose([]).value
 
     @property
-    @units.quantity_input
     def porb(self) -> units.day:
         return (
             2
             * numpy.pi
-            * numpy.sqrt(self.a**3 / (constants.G * self.Mtot)).to(units.day)
+            * ((self.a**3 / (constants.G * self.Mtot)) ** 0.5).to(units.day)
         )
 
-    def r(self, m, phase):
+    @units.quantity_input
+    def r(self, m: units.kg, phase: units.rad) -> units.m:
         """
         The distance from the centre of mass of the object with mass 'm' at 'phase'
         """
@@ -137,11 +146,21 @@ class SelfLensingSystem(object):
             1 + self.e * numpy.cos(phase - self.periapsis_phase)
         )
 
-    def rE(self, phase=0):
-        return numpy.sqrt(
-            (4 * constants.G * self.Macc * self.r_sep(phase) * self.sin_i)
-            / constants.c**2
-        ).to(units.R_sun)
+    @units.quantity_input
+    def rE(self, phase: units.rad = 0 * units.rad) -> Quantity:
+        return Quantity.from_(
+            (
+                (
+                    4
+                    * constants.G
+                    * self.Macc.to(units.kg)
+                    * self.r_sep(phase).to(units.m)
+                    * self.sin_i
+                )
+                / constants.c**2
+            )
+            ** 0.5
+        )
 
     @property
     def r_roche(self):
@@ -154,10 +173,12 @@ class SelfLensingSystem(object):
         A = self.r_sep(self.periapsis_phase)
         return A * ((0.49 * q23) / (0.6 * q23 + numpy.log(1 + q ** (1.0 / 3.0))))
 
-    def r_sep(self, phase=0):
+    @units.quantity_input
+    def r_sep(self, phase: units.rad = 0 * units.rad) -> units.m:
         """
         The separation in space between acc and comp at phase
         """
+        # print(self.Macc, self.Mcomp)
         return self.r(self.Macc, phase) + self.r(self.Mcomp, phase)
 
     @property
@@ -171,7 +192,7 @@ class SelfLensingSystem(object):
         """
         return (
             ((self.porb * (self.rE() + self.Rcomp)) / (numpy.pi * self.a * self.sin_i))
-            * numpy.sqrt(1 - (self.b / self.b_max) ** 2)
+            * (1 - (self.b / self.b_max) ** 2) ** 0.5
         ).to(units.day)
 
     def time_to_l(self, time):
@@ -186,27 +207,32 @@ class SelfLensingSystem(object):
         Convert time offsets to angular orbital phases.
         """
         time = time % self.porb
-        return (((time / self.porb).decompose() * 2 * numpy.pi)) * units.rad
+        return (((time / self.porb).decompose([]) * 2 * numpy.pi)) * units.rad
 
-    def v(self, m, phase):
+    @units.quantity_input
+    def v(self, m: units.kg, phase: units.rad) -> units.m / units.s:
         """
         Orbital velocity.
         """
-        v = numpy.sqrt(
+        v = (
             (constants.G * self.Mtot)
             * (2 / self.r(m, phase) - 1 / (self.a * m / self.Mtot))
-        )
+        ) ** 0.5
         return v.to(units.m / units.s)
 
-    def v_tot(self, phase):
+    @units.quantity_input
+    def v_tot(self, phase: units.rad) -> units.m / units.s:
         return self.v(self.Mtot, phase)
 
-    def v_acc(self, phase):
+    @units.quantity_input
+    def v_acc(self, phase: units.rad) -> units.m / units.s:
         return self.v(self.Macc, phase)
 
     @property
     def v_avg(self):
         return (2 * numpy.pi * self.a / self.porb).to(units.m / units.s)
 
-    def v_comp(self, phase):
-        return self.v(self.Mcomp, phase)
+    @units.quantity_input
+    def v_comp(self, phase: units.rad) -> units.m / units.s:
+        # return self.v(self.Mcomp, phase)
+        return (constants.G * self.Macc / self.r_sep(phase)) ** 0.5

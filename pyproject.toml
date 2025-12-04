@@ -35,6 +35,7 @@ dependencies=[
     "jax (>=0.8.1,<0.9.0)",
     "tinygp (>=0.3.0,<0.4.0)",
     "scikit-learn (>=1.7.2,<2.0.0)",
+    "unxt (>=1.7.7,<2.0.0)",
 ]
 
 [project.urls]

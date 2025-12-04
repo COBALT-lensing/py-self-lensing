@@ -70,20 +70,20 @@ class GeneratorBase(object):
         return [(t - self.peak_time).jd for t in self.peak_times] * units.day
 
 
+DEFAULT_BASELINE = 1.0
+
+
 class FlatLightcurveGenerator(GeneratorBase):
     def __init__(
         self,
         *args,
-        baseline=1.0,
+        baseline=DEFAULT_BASELINE,
+        gp=None,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
-        if isinstance(baseline, BaseGP):
-            self.baseline = baseline(self.lensing_system).generate_noise(
-                self.time_offsets
-            )
-        else:
-            self.baseline = baseline
+        self.baseline = numpy.full(len(self.times), baseline) * self.units
+        self.gp = gp
 
     def __str__(self):
         return "Generated Flat Light Curve"
@@ -100,12 +100,31 @@ class FlatLightcurveGenerator(GeneratorBase):
         return numpy.nansum((flux - self.flux_array) ** 2 / err2) / nu
 
     @property
+    def amplification(self):
+        return 1
+
+    @property
     def flux_array(self):
-        return numpy.full(len(self.times), self.baseline) * self.units
+        return self.amplification * self.baseline
 
     @property
     def flux_err_array(self):
         return numpy.full(len(self.times), numpy.nan) * self.units
+
+    @property
+    def gp(self):
+        return self._gp
+
+    @gp.setter
+    def gp(self, v):
+        if v is None:
+            self._gp = None
+        else:
+            if type(v) is type:
+                self._gp = v(self.lensing_system, self.time_offsets)
+            else:
+                self._gp = v
+            self.baseline = self._gp.generate_noise()
 
     @property
     def timeseries(self):
@@ -148,15 +167,16 @@ class DopplerBoostingLightcurveGenerator(FlatLightcurveGenerator):
         return (e_x * (3 - x) - 3) / (e_x - 1)
 
     @property
-    def flux_array(self):
+    def amplification(self):
         rvg = RVGenerator(
             self.lensing_system, times=self.times, peak_time=self.peak_time
         )
         rv = rvg.rv
-        return (
-            super().flux_array
-            * ((3 - self.alpha) * (rv / constants.c) * self.lensing_system.sin_i).value
-        )
+        return ((3 - self.alpha) * (rv / constants.c) * self.lensing_system.sin_i).value
+
+    @property
+    def flux_array(self):
+        return self.baseline * (1 + self.amplification)
 
 
 class EllipsoidalVariationsLightcurveGenerator(FlatLightcurveGenerator):
@@ -178,39 +198,44 @@ class EllipsoidalVariationsLightcurveGenerator(FlatLightcurveGenerator):
         return "Generated Ellipsoidal Variations Light Curve"
 
     @property
-    def beta(self):
-        return 0.15 * (1 + self.g) * (15 + self.gamma) / (3 - self.gamma)
-
-    @property
-    def flux_array(self):
+    def amplification(self):
         phases = self.lensing_system.time_to_phase(self.time_offsets * 2)
         return (
-            super().flux_array
-            * (
+            (
                 (
                     self.beta
-                    * (self.lensing_system.Macc / self.lensing_system.Mcomp).decompose()
+                    * (self.lensing_system.Macc / self.lensing_system.Mcomp).decompose(
+                        []
+                    )
                     * (
                         self.lensing_system.Rcomp / self.lensing_system.r_sep(phases)
-                    ).decompose()
+                    ).decompose([])
                     ** 3
                     * self.lensing_system.sin_i**2
                 )
                 * (numpy.cos(phases))
                 * -1
             )
-            .decompose()
+            .decompose([])
             .value
         )
+
+    @property
+    def beta(self):
+        return 0.15 * (1 + self.g) * (15 + self.gamma) / (3 - self.gamma)
+
+    @property
+    def flux_array(self):
+        return self.baseline * (1 + self.amplification)
 
 
 class SelfLensingLightcurveGenerator(FlatLightcurveGenerator):
     DEFAULT_LENSING_METHOD = "IntegratedWittMao"
 
     lensing_methods = {
-        "IntegratedHeyrovsky": "integrated_heyrovsky_flux_array",
-        "IntegratedWittMao": "integrated_witt_mao_flux_array",
-        "WittMao": "witt_mao_flux_array",
+        "IntegratedHeyrovsky": "integrated_heyrovsky_amplification",
+        "IntegratedWittMao": "integrated_witt_mao_amplification",
+        "WittMao": "witt_mao_amplification",
     }
 
     def __init__(self, *args, lensing_method=DEFAULT_LENSING_METHOD, **kwargs):
@@ -221,8 +246,7 @@ class SelfLensingLightcurveGenerator(FlatLightcurveGenerator):
         return "Generated Self Lensing Light Curve"
 
     @property
-    def flux_array(self):
-        flux_array = super().flux_array
+    def amplification(self):
         rE = self.lensing_system.rE()
         if (
             rE is not None
@@ -230,11 +254,11 @@ class SelfLensingLightcurveGenerator(FlatLightcurveGenerator):
             and not numpy.isnan(rE)
             and not numpy.isnan(self.lensing_system.b)
         ):
-            flux_array *= getattr(self, self.lensing_methods[self.lensing_method])
-        return flux_array
+            return getattr(self, self.lensing_methods[self.lensing_method])
+        return super().amplification
 
     @property
-    def heyrovsky_flux_array(self):
+    def heyrovsky_amplification(self):
         return numpy.array(
             rustlens.integrated_heyrovsky_magnification(
                 self.lensing_system.time_to_l(self.time_offsets),
@@ -244,7 +268,7 @@ class SelfLensingLightcurveGenerator(FlatLightcurveGenerator):
         )
 
     @property
-    def integrated_witt_mao_flux_array(self):
+    def integrated_witt_mao_amplification(self):
         return numpy.array(
             rustlens.integrated_witt_mao_magnification(
                 self.lensing_system.time_to_b(self.time_offsets),
@@ -254,7 +278,7 @@ class SelfLensingLightcurveGenerator(FlatLightcurveGenerator):
         )
 
     @property
-    def witt_mao_flux_array(self):
+    def witt_mao_amplification(self):
         return numpy.array(
             rustlens.witt_mao_magnification(
                 self.lensing_system.time_to_b(self.time_offsets),
@@ -355,10 +379,10 @@ class LightcurveGenerator(FlatLightcurveGenerator):
             self.db.peak_time = pk
 
     @property
-    def flux_array(self):
-        return (
-            self.sl.flux_array * (1 + (self.ev.flux_array + self.db.flux_array))
-        ) * super().flux_array
+    def amplification(self):
+        return self.sl.amplification * (
+            1 + (self.ev.amplification + self.db.amplification)
+        )
 
 
 class RVGenerator(GeneratorBase):

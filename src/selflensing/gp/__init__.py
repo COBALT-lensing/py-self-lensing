@@ -33,12 +33,50 @@ class TESSGP(BaseGP):
     mu_bounds = [(0.0, 7.0)]  # log10 μ
     cadence_s = 600.0
     use_kde_flag = True
+    Q_s = 5.0  # S: quality factor (broad)
 
-    def __init__(self, sls, lc_times=None, observed_lc=None):
+    def __init__(
+        self, sls, lc_times=None, observed_lc=None, mean_vals=None, nwalkers=None
+    ):
         self.sls = sls
 
+        self.seed = int(time.time()) % (
+            2**32
+        )  # Generate a seed based on the current time
+
+        if lc_times is not None:
+            self.lc_times = lc_times
+        if observed_lc is not None:
+            self.observed_lc = observed_lc
+        self.mean_vals = mean_vals
+        self.nwalkers = nwalkers
+
+    def generate_noise(self):
+        # --- assemble theta and build GP ---
+        # print("theta=", noise_only_theta)
+        nhyp = len(self.gs_hypers)
+
+        kernel_fn = lgp.make_kernel_fn(self.kernel_type)
+        noise_gp = lgp.build_model_additive(
+            theta=self.theta,
+            nhyp=nhyp,
+            kernel_fn=kernel_fn,
+            T=self.T,
+            include_lens_mean=0,
+            noise_measure=float(self.noise_measure),
+        )
+
+        return noise_gp.sample(jax.random.key(self.seed))
+
+    @property
+    def sls(self):
+        return self._sls
+
+    @sls.setter
+    def sls(self, sls):
+        self._sls = sls
         test_Mag, noise_measure = ff.conv_mass_to_mag(
-            M=self.sls.Mcomp.value, D_kpc=self.sls.d.value
+            M=sls.Mcomp.value, D_kpc=sls.d.value
         )
         # print("TESS mag:", float(test_Mag))
 
@@ -51,55 +89,46 @@ class TESSGP(BaseGP):
             10**self.mu_test
         )  # * np.sqrt(60.0/2.0)
 
-        self.seed = int(time.time()) % (
-            2**32
-        )  # Generate a seed based on the current time
-
-        if lc_times is not None:
-            self.lc_times = lc_times
-        if observed_lc is not None:
-            self.observed_lc = observed_lc
-
-    def generate_noise(self, times):
         # --- build GS kernel hypers directly (physics + μ bands) ---
-        lnu_g = np.log10(
+        self.lnu_g = np.log10(
             float(physr.granulation_frequency_relation(self.sls.Mcomp.value))
         )  # G: log10 ν_gran [Hz]
-        lsig_g = float(
+        self.lsig_g = float(
             ps.expected_log_sigma(jnp.asarray(self.mu_test), "G")
         )  # G: log10 σ_gran
 
-        lnu_s = np.log10(
+        self.lnu_s = np.log10(
             float(physr.asteroseismic_frequency_relation(self.sls.Mcomp.value))
         )  # S: log10 ν_seis [Hz]
-        Q_s = 5.0  # S: quality factor (broad)
-        lsig_s = float(
+
+        self.lsig_s = float(
             ps.expected_log_sigma(jnp.asarray(self.mu_test), "S")
         )  # S: log10 σ_seis
 
-        gs_hypers = np.array([lnu_g, lsig_g, lnu_s, Q_s, lsig_s], dtype=float)
+        self.gs_hypers = np.array(
+            [self.lnu_g, self.lsig_g, self.lnu_s, self.Q_s, self.lsig_s], dtype=float
+        )
 
-        # --- assemble theta and build GP ---
-        noise_only_theta = jnp.concatenate(
+    @property
+    def theta(self):
+        t = np.concatenate(
             [
-                jnp.asarray(gs_hypers, dtype=float),
+                jnp.asarray(self.gs_hypers, dtype=float),
                 jnp.array([self.mu_test], dtype=float),
             ]
         )
-        print("theta=", noise_only_theta)
-        nhyp = len(gs_hypers)
+        # print("theta=", t)
+        return t
 
-        kernel_fn = lgp.make_kernel_fn(self.kernel_type)
-        noise_gp = lgp.build_model_additive(
-            theta=noise_only_theta,
-            nhyp=nhyp,
-            kernel_fn=kernel_fn,
-            T=jnp.asarray(times, dtype=float),
-            include_lens_mean=0,
-            noise_measure=float(self.noise_measure),
-        )
+    @property
+    def mean_vals(self):
+        return self._mean_vals
 
-        return noise_gp.sample(jax.random.key(self.seed))
+    @mean_vals.setter
+    def mean_vals(self, v):
+        self._mean_vals = v
+        if hasattr(self, "logprob"):
+            del self.logprob
 
     @property
     def kernel_bounds(self):
@@ -159,6 +188,17 @@ class TESSGP(BaseGP):
         return tuple(map(tuple, full_bounds))
 
     @cached_property
+    def kernel_mu_bounds(self):
+        full_bounds = ps.build_combined_bounds(
+            kernel_type=self.kernel_type,
+            kernel_bounds_dict=self.kernel_bounds,
+            lens_bounds=self.lens_bounds,
+            mu_bounds=self.mu_bounds,
+            include_lens_mean=0,
+        )
+        return tuple(map(tuple, full_bounds))
+
+    @cached_property
     def kde_output_tuple(self):
         return ps.build_kde_3d(
             csv_paths=self.csv_paths,
@@ -178,10 +218,17 @@ class TESSGP(BaseGP):
 
     @property
     def nwalkers(self):
-        return 4 * self.ndim
+        return self._nwalkers
+
+    @nwalkers.setter
+    def nwalkers(self, v):
+        if v is None:
+            self._nwalkers = 4 * self.ndim
+        else:
+            self._nwalkers = v
 
     @cached_property
-    def p0_full(self):
+    def p0(self):
         return mcf.init_walkers(
             n_walkers=self.nwalkers,
             param_bounds=self.full_bounds,
@@ -197,23 +244,6 @@ class TESSGP(BaseGP):
             cadence_s=self.cadence_s,
         )
 
-    @property
-    def p0(self):
-        return self.p0_full[: self.nhyp] + self.p0_full[-1:]
-
-    def expand_p0(self, p0):
-        return (
-            p0[: self.nhyp]
-            + [
-                self.sls.Mcomp.value,
-                self.sls.Macc.value,
-                np.log10(self.sls.Porb.value),
-                self.sls.i.value,
-                self.sls.periapsis_phase.value,
-            ]
-            + p0[-1:]
-        )
-
     @cached_property
     def logprob(self):
         return mcf.make_emcee_vectorized_logprob(
@@ -226,7 +256,45 @@ class TESSGP(BaseGP):
             # --- Physical prior enabled ---
             phys_scale=True,
             include_lens_mean=False,
+            mean_vals=self.mean_vals,
         )
+
+    @cached_property
+    def logprob_single(self):
+        single = mcf.make_logposterior_fn(
+            kernel_type=self.kernel_type,
+            nhyp=self.nhyp,
+            noise_measure=self.noise_measure,
+            param_bounds=self.kernel_mu_bounds,
+            kde3d_args=self.kde_output_tuple,
+            phys_scale=True,
+            include_lens_mean=False,
+            mean_vals=self.mean_vals,
+        )
+
+        def wrapped():
+            return single(theta=self.theta, T=self.T, y=self.y)
+
+        return wrapped
+        # print(ps.log_prior_bounds(self.theta, self.kernel_mu_bounds))
+        # p = mcf._log_posterior_single(
+        #     theta=self.theta,
+        #     T=self.T,
+        #     y=self.y,
+        #     kernel_fn=lgp.make_kernel_fn(self.kernel_type),
+        #     log_prior_phys_fn=None,  # ps.make_log_prior_physical_jit(
+        #     # self.kernel_type
+        #     # ),  # from ps.make_log_prior_physical_jit (or None)
+        #     kde_lp_fn=None,  # from ps.make_kde3d_logprior_jit (or None)
+        #     nhyp=self.nhyp,
+        #     noise_measure=self.noise_measure,
+        #     combined_bounds=self.kernel_mu_bounds,
+        #     include_lens_mean=0,
+        #     mean_vals=self.mean_vals,
+        # )
+
+        # # print("logprob:", p, self.theta, self.y)
+        # return p
 
     @property
     def lc_times(self):
@@ -257,7 +325,7 @@ class TESSGP(BaseGP):
 
         nburn, nprod = 500, 2000
         # print(f"Running burn-in ({nburn} steps)...")
-        p0, _, _ = sampler_lens.run_mcmc(self.p0_full, nburn, progress=True)
+        p0, _, _ = sampler_lens.run_mcmc(self.p0, nburn, progress=True)
         sampler_lens.reset()
         # print(f"Running production ({nprod} steps)...")
         sampler_lens.run_mcmc(p0, nprod, progress=True)
@@ -280,3 +348,14 @@ class TESSGP(BaseGP):
         best_idx = np.argmax(logp_lens)
         theta_hat = flat_chain_lens[best_idx]
         return theta_hat, sampler_lens
+
+
+# class GPMethods(object):
+#     TESS = 0
+
+#     methods = {
+#         TESS: TESSGP,
+#     }
+
+#     def get(self, k):
+#         return self.methods.get(k)

@@ -123,7 +123,7 @@ def init_walkers(
     width = np.clip(b[:, 1] - b[:, 0], 1e-12, np.inf)
     jitter = 0.01 * width
 
-    rng = np.random.default_rng(12345)
+    rng = np.random.default_rng()
     p0 = np.tile(theta0, (n_walkers, 1))
     p0 += rng.normal(0.0, jitter, size=p0.shape)
     p0 = np.clip(p0, b[:, 0], b[:, 1])
@@ -148,6 +148,7 @@ def _log_posterior_single(
     noise_measure: float,
     combined_bounds: tuple[tuple[float, float], ...],
     include_lens_mean: int,
+    mean_vals: jnp.ndarray | None = None,
 ) -> jnp.ndarray:
     """
     Single-point log-posterior: prior + GP likelihood.
@@ -185,6 +186,7 @@ def _log_posterior_single(
             T=T,
             include_lens_mean=include_lens_mean,
             noise_measure=noise_measure,
+            mean_vals=mean_vals,
         )
         return lp + gp.log_probability(y)
 
@@ -211,6 +213,7 @@ def make_logposterior_fn(
     kde3d_args: tuple | None = None,  # 6-tuple from PriorsSamplers.build_kde_3d
     phys_scale: bool = False,
     include_lens_mean: bool = True,
+    mean_vals: jnp.ndarray | None = None,
 ):
     """
     Factory returning a **JIT-compiled** single-point log-posterior:
@@ -267,6 +270,7 @@ def make_logposterior_fn(
             noise_measure=float(noise_measure),
             combined_bounds=combined_bounds,
             include_lens_mean=int(bool(include_lens_mean)),
+            mean_vals=mean_vals,
         )
 
     return _wrapped
@@ -281,6 +285,7 @@ def make_batched_logposterior_fn(
     kde3d_args: tuple | None = None,
     phys_scale: bool = False,
     include_lens_mean: bool = True,
+    mean_vals: jnp.ndarray | None = None,
 ):
     """
     Returns a **JIT-compiled** function evaluating the log-posterior for a *batch*
@@ -295,6 +300,7 @@ def make_batched_logposterior_fn(
         kde3d_args=kde3d_args,
         phys_scale=phys_scale,
         include_lens_mean=include_lens_mean,
+        mean_vals=mean_vals,
     )
 
     @jax.jit
@@ -316,6 +322,7 @@ def make_emcee_vectorized_logprob(
     kde3d_args: tuple | None = None,
     phys_scale: bool = False,
     include_lens_mean: bool = True,
+    mean_vals: jnp.ndarray | None = None,
 ):
     """
     Convenience wrapper for emcee(vectorize=True).
@@ -330,6 +337,7 @@ def make_emcee_vectorized_logprob(
         kde3d_args=kde3d_args,
         phys_scale=phys_scale,
         include_lens_mean=include_lens_mean,
+        mean_vals=mean_vals,
     )
 
     def logprob(thetas, T, y):

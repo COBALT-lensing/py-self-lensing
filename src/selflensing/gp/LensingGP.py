@@ -265,6 +265,7 @@ def build_model_additive(
     T: jnp.ndarray,
     include_lens_mean: int = 1,
     noise_measure: float = 0.0,
+    mean_vals: jnp.ndarray | None = None,
 ) -> GaussianProcess:
     """
     theta layout reminder (for any kernel_type):
@@ -296,7 +297,7 @@ def build_model_additive(
         # Append logmu so periodic_lensing_mean can fetch μ consistently
         lens_params = jnp.concatenate([lens_core, jnp.atleast_1d(logmu)])
         mean_vals = periodic_lensing_mean(lens_params, T)
-    else:
+    elif mean_vals is None:
         # No lensing mean; flat baseline
         mean_vals = mu * jnp.ones_like(T)
 
