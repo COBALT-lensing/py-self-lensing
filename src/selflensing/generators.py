@@ -5,7 +5,12 @@ import rustlens
 from astropy.timeseries import TimeSeries
 from astropy import units, constants
 
-from .gp import BaseGP
+import jax
+from jax import numpy as jnp
+
+from src.selflensing.lensing import wm_callback
+
+# from src.selflensing.gp.LensingGP import _run_nucs_safe
 
 
 class GeneratorBase(object):
@@ -42,7 +47,7 @@ class GeneratorBase(object):
 
     @property
     def time_offsets(self):
-        return (self.times - self.peak_time).jd * units.day
+        return (self.times - self.peak_time).jd.astype(numpy.float32) * units.day
 
     @property
     def peak_times(self):
@@ -101,7 +106,7 @@ class FlatLightcurveGenerator(GeneratorBase):
 
     @property
     def amplification(self):
-        return 1
+        return 1.0
 
     @property
     def flux_array(self):
@@ -161,9 +166,11 @@ class DopplerBoostingLightcurveGenerator(FlatLightcurveGenerator):
         Journal 936, no. 1 (August 2022): 63, https://doi.org/10.3847/1538-4357/ac82b7.
         """
         x = (
-            constants.h * self.obs_freq / (constants.k_B * self.lensing_system.Teff)
-        ).value
-        e_x = numpy.exp(x)
+            constants.h.value
+            * self.obs_freq.value
+            / (constants.k_B.value * self.lensing_system.Teff.value)
+        )
+        e_x = jnp.exp(x)
         return (e_x * (3 - x) - 3) / (e_x - 1)
 
     @property
@@ -171,8 +178,14 @@ class DopplerBoostingLightcurveGenerator(FlatLightcurveGenerator):
         rvg = RVGenerator(
             self.lensing_system, times=self.times, peak_time=self.peak_time
         )
-        rv = rvg.rv
-        return ((3 - self.alpha) * (rv / constants.c) * self.lensing_system.sin_i).value
+        rv = rvg.rv.to(units.m / units.s)
+        r = (
+            (3 - self.alpha)
+            * (rv.value / constants.c.value)
+            * self.lensing_system.sin_i.value
+        )
+        print("db r", type(r), r)
+        return r
 
     @property
     def flux_array(self):
@@ -213,7 +226,7 @@ class EllipsoidalVariationsLightcurveGenerator(FlatLightcurveGenerator):
                     ** 3
                     * self.lensing_system.sin_i**2
                 )
-                * (numpy.cos(phases))
+                * (jnp.cos(phases.value))
                 * -1
             )
             .decompose([])
@@ -248,14 +261,49 @@ class SelfLensingLightcurveGenerator(FlatLightcurveGenerator):
     @property
     def amplification(self):
         rE = self.lensing_system.rE()
-        if (
-            rE is not None
-            and not numpy.isinf(rE)
-            and not numpy.isnan(rE)
-            and not numpy.isnan(self.lensing_system.b)
-        ):
-            return getattr(self, self.lensing_methods[self.lensing_method])
-        return super().amplification
+        super_amplification = super().amplification
+
+        # def super_amplification_wrapper(amplification, offsets):
+        def super_amplification_wrapper():
+            offsets = self.time_offsets
+            amplification = super_amplification
+            r = jnp.array([amplification] * len(offsets))
+            return r
+
+        # super_amplification_callback = jax.pure_callback(
+        #     super_amplification_wrapper,
+        #     jax.ShapeDtypeStruct(self.time_offsets.shape, self.time_offsets.dtype),
+        #     super_amplification,
+        #     self.time_offsets,
+        # )
+
+        return jax.lax.cond(
+            rE is None,
+            super_amplification_wrapper,
+            lambda: jax.lax.cond(
+                jnp.isinf(rE.value),
+                super_amplification_wrapper,
+                lambda: jax.lax.cond(
+                    jnp.isnan(rE.value),
+                    super_amplification_wrapper,
+                    lambda: jax.lax.cond(
+                        jnp.isnan(self.lensing_system.b.value),
+                        super_amplification_wrapper,
+                        lambda: getattr(
+                            self, self.lensing_methods[self.lensing_method]
+                        ),
+                    ),
+                ),
+            ),
+        )
+        # if (
+        #     rE is not None
+        #     and not jnp.isinf(rE.value)
+        #     and not jnp.isnan(rE.value)
+        #     and not jnp.isnan(self.lensing_system.b.value)
+        # ):
+        #     return getattr(self, self.lensing_methods[self.lensing_method])
+        # return super().amplification
 
     @property
     def heyrovsky_amplification(self):
@@ -269,13 +317,29 @@ class SelfLensingLightcurveGenerator(FlatLightcurveGenerator):
 
     @property
     def integrated_witt_mao_amplification(self):
-        return numpy.array(
-            rustlens.integrated_witt_mao_magnification(
-                self.lensing_system.time_to_b(self.time_offsets),
-                self.lensing_system.rE().to(units.m).value,
-                self.lensing_system.Rcomp.to(units.m).value,
-            )
+        offsets = self.lensing_system.time_to_b(self.time_offsets)
+        out_shape = jax.ShapeDtypeStruct(offsets.shape, offsets.dtype)
+
+        # jax.debug.print("wm pre-callback")
+        r = jax.pure_callback(
+            wm_callback,
+            out_shape,
+            offsets,
+            self.lensing_system.Rcomp.to(units.m).value,
+            self.lensing_system.rE().to(units.m).value,
+            vmap_method="sequential",
         )
+        # jax.debug.print("wm final result: {r}", r=r)
+        return r
+
+        # return jnp.array(
+        #     rustlens.integrated_witt_mao_magnification(
+        #         self.lensing_system.time_to_b(self.time_offsets),
+        #         self.lensing_system.rE().to(units.m).value.astype(float),
+        #         self.lensing_system.Rcomp.to(units.m).value.astype(float),
+        #     ),
+        #     float,
+        # )
 
     @property
     def witt_mao_amplification(self):
@@ -380,9 +444,14 @@ class LightcurveGenerator(FlatLightcurveGenerator):
 
     @property
     def amplification(self):
-        return self.sl.amplification * (
-            1 + (self.ev.amplification + self.db.amplification)
-        )
+
+        @jax.jit
+        def f():
+            return self.sl.amplification * (
+                1 + (self.ev.amplification + self.db.amplification)
+            )
+
+        return f()
 
 
 class RVGenerator(GeneratorBase):
@@ -397,7 +466,7 @@ class RVGenerator(GeneratorBase):
         phases = self.phases()
         return (
             self.lensing_system.v_comp(phases)
-            * numpy.sin(phases)
+            * jnp.sin(phases.value)
             * self.lensing_system.sin_i
         ).to(self.units)
 

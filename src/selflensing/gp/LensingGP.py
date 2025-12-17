@@ -10,6 +10,7 @@ import rustlens
 
 # ---- Physics (single source of truth for R(M); SI meters) ----
 from .PhysicalRelations import stellar_radius_m  # R(M) in meters
+from ..lensing import wm_callback
 
 # Astrophysical constants (SI)
 M_sun = const.M_sun.value
@@ -23,37 +24,37 @@ TWOPI = 2.0 * PI
 # ----------------------------------------------------------------------------
 # RustLens callback for self-lensing magnification with JAX compatibility
 # ----------------------------------------------------------------------------
-def _run_nucs_safe(
-    offsets: np.ndarray, source_radius: float, R_s_val: float, R_E_val: float
-) -> np.ndarray:
-    """
-    Safe wrapper around rustlens.integrated_witt_mao_magnification.
-    Offsets are passed in units of source radius (dimensionless).
-    Returns unity profile on failure to keep GP stable.
-    """
-    bs = offsets / source_radius
-    if (
-        np.isnan(R_E_val)
-        or np.isnan(R_s_val)
-        or np.any(np.isnan(bs))
-        or np.isinf(R_E_val)
-        or np.isinf(R_s_val)
-        or np.any(np.isinf(bs))
-    ):
-        return np.ones_like(offsets)
-    try:
-        return np.array(
-            rustlens.integrated_witt_mao_magnification(
-                bs.tolist(),  # dimensionless impact parameters
-                float(R_E_val),  # Einstein radius [m]
-                float(R_s_val),  # source radius [m]
-            )
-        )
-    # except Exception:
-    #     return np.ones_like(offsets)
-    except BaseException:
-        print("PANIC", R_E_val, R_s_val, bs)
-        raise
+# def _run_nucs_safe(
+#     offsets: np.ndarray, source_radius: float, R_s_val: float, R_E_val: float
+# ) -> np.ndarray:
+#     """
+#     Safe wrapper around rustlens.integrated_witt_mao_magnification.
+#     Offsets are passed in units of source radius (dimensionless).
+#     Returns unity profile on failure to keep GP stable.
+#     """
+#     bs = offsets / source_radius
+#     if (
+#         np.isnan(R_E_val)
+#         or np.isnan(R_s_val)
+#         or np.any(np.isnan(bs))
+#         or np.isinf(R_E_val)
+#         or np.isinf(R_s_val)
+#         or np.any(np.isinf(bs))
+#     ):
+#         return np.ones_like(offsets)
+#     try:
+#         return np.array(
+#             rustlens.integrated_witt_mao_magnification(
+#                 bs.tolist(),  # dimensionless impact parameters
+#                 float(R_E_val),  # Einstein radius [m]
+#                 float(R_s_val),  # source radius [m]
+#             )
+#         )
+#     # except Exception:
+#     #     return np.ones_like(offsets)
+#     except BaseException:
+#         print("PANIC", R_E_val, R_s_val)  # , bs)
+#         raise
 
 
 @jax.custom_jvp
@@ -66,7 +67,7 @@ def run_nucs_callback(
     """
     out_shape = jax.ShapeDtypeStruct(offsets.shape, offsets.dtype)
     return jax.pure_callback(
-        _run_nucs_safe,
+        wm_callback,
         out_shape,
         offsets,
         source_radius,

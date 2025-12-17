@@ -1,7 +1,14 @@
 from quaxed import numpy
+from jax import numpy as jnp
 
 from astropy import units, constants
 from unxt import Quantity
+
+from .gp.PhysicalRelations import (
+    stellar_radius_Rsun,
+    effective_temperature_K,
+)
+from .gp.FluxFinderSensitivity import conv_mass_to_mag
 
 
 class SelfLensingSystem(object):
@@ -16,7 +23,6 @@ class SelfLensingSystem(object):
         "periapsis_phase": units.rad,
         "d": units.kpc,
     }
-    DEFAULT_TEFF = 5000 * units.K
     DEFAULT_PERIAPSIS = 0 * units.rad
     DEFAULT_E = 0 * units.dimensionless_unscaled
     DEFAULT_I = 0 * units.rad
@@ -27,10 +33,10 @@ class SelfLensingSystem(object):
         self,
         Macc: units.kg,
         Mcomp: units.kg,
-        Rcomp: units.m,
+        Rcomp: units.m = None,
         a: units.m = None,
         # b: units.dimensionless_unscaled = DEFAULT_B,  # type: ignore
-        Teff: units.K = DEFAULT_TEFF,
+        Teff: units.K = None,
         e: units.dimensionless_unscaled = DEFAULT_E,  # type: ignore
         periapsis_phase: units.rad = DEFAULT_PERIAPSIS,
         i: units.rad = DEFAULT_I,
@@ -43,12 +49,20 @@ class SelfLensingSystem(object):
             a = (constants.G * (Macc + Mcomp) * (Porb / (2 * numpy.pi)) ** 2) ** (
                 1.0 / 3.0
             )
-        self.a = a.to(self.param_units["a"])
+        self.a = Quantity.from_(a.to(self.param_units["a"]))
+
+        if Rcomp is None:
+            Rcomp = stellar_radius_Rsun(Mcomp.to(units.M_sun).value) * units.R_sun
+
+        if Teff is None:
+            Teff = Quantity.from_(
+                effective_temperature_K(Mcomp.to(units.M_sun).value), units.K
+            )
+        self.Teff = Quantity.from_(Teff.to(self.param_units["Teff"]))
 
         self.Macc = Quantity.from_(Macc.to(self.param_units["Macc"]))
         self.Rcomp = Quantity.from_(Rcomp.to(self.param_units["Rcomp"]))
         self.Mcomp = Quantity.from_(Mcomp.to(self.param_units["Mcomp"]))
-        self.Teff = Quantity.from_(Teff.to(self.param_units["Teff"]))
         self.e = Quantity.from_(e)
         self.periapsis_phase = Quantity.from_(
             periapsis_phase.to(self.param_units["periapsis_phase"])
@@ -73,7 +87,8 @@ class SelfLensingSystem(object):
         self._i = i
         self.sin_i = numpy.sin(i)
         # Calculate as per Wiktorowicz+2021
-        self._b = (self.a * numpy.cos(i) / self.rE()).decompose()
+        # Floating point errors can make this a small negative number
+        self._b = numpy.abs((self.a * numpy.cos(i) / self.rE()).decompose([]))
 
     @property
     def b_max(self):
@@ -98,8 +113,12 @@ class SelfLensingSystem(object):
     def Mtot(self):
         return self.Macc + self.Mcomp
 
+    @property
+    def Tmag(self):
+        return conv_mass_to_mag(self.Mcomp.value, self.d.value)[0]
+
     @units.quantity_input
-    def phase_to_l(self, phase: units.rad) -> float:
+    def phase_to_l(self, phase: units.rad):
         """
         Given a phase angle, compute the distance of the lens from the centre of the disk.
 
@@ -108,59 +127,56 @@ class SelfLensingSystem(object):
         phase_limit = 0.5 * numpy.pi * units.rad
         phase_upper_limit = 2 * numpy.pi * units.rad - phase_limit
         if isinstance(phase, numpy.ndarray) or phase.shape != tuple():
-            phase[(phase > phase_limit) & (phase < phase_upper_limit)] = phase_limit
+            phase = jnp.array(phase.value)
+            phase = jnp.where(
+                (phase > phase_limit.value) & (phase < phase_upper_limit.value),
+                jnp.full_like(phase, phase_limit.value),
+                phase,
+            )
+            phase = Quantity(phase, units.rad)
         elif phase > phase_limit and phase < phase_upper_limit:
             phase = 0.5 * numpy.pi * units.rad
-        return (
-            numpy.hypot(
-                numpy.abs(
-                    self.r_sep(phase=phase).to(units.m)
-                    * numpy.sin(phase)
-                    / self.Rcomp.to(units.m)
-                ),
-                self.b_source.value,
-            )
-            # .decompose([])
-            # .value
+        return numpy.hypot(
+            numpy.abs(
+                self.r_sep(phase=phase).to(units.m).value
+                * numpy.sin(phase.value)
+                / self.Rcomp.to(units.m).value
+            ),
+            self.b_source.value,
         )
 
     @units.quantity_input
-    def phase_to_b(self, phase: units.rad) -> float:
-        return self.phase_to_l(phase) / (self.rE() / self.Rcomp).decompose([]).value
+    def phase_to_b(self, phase: units.rad):
+        return (self.phase_to_l(phase) / (self.rE() / self.Rcomp)).decompose([]).value
 
     @property
     def porb(self) -> units.day:
-        return (
-            2
-            * numpy.pi
-            * ((self.a**3 / (constants.G * self.Mtot)) ** 0.5).to(units.day)
-        )
+        a = self.a.to(units.m).value.astype(float)
+        m = self.Mtot.to(units.kg).value.astype(float)
+        G = constants.G.value.astype(float)
+        return Quantity((2 * numpy.pi * ((a**3 / (G * m)) ** 0.5)), "s").to(units.day)
 
-    @units.quantity_input
+    # @units.quantity_input
     def r(self, m: units.kg, phase: units.rad) -> units.m:
         """
         The distance from the centre of mass of the object with mass 'm' at 'phase'
         """
         r_max = self.a * m / self.Mtot
         return (r_max * (1 - self.e**2)) / (
-            1 + self.e * numpy.cos(phase - self.periapsis_phase)
+            1
+            + self.e
+            * numpy.cos(
+                phase.to(units.rad).value - self.periapsis_phase.to(units.rad).value
+            )
         )
 
     @units.quantity_input
     def rE(self, phase: units.rad = 0 * units.rad) -> Quantity:
-        return Quantity.from_(
-            (
-                (
-                    4
-                    * constants.G
-                    * self.Macc.to(units.kg)
-                    * self.r_sep(phase).to(units.m)
-                    * self.sin_i
-                )
-                / constants.c**2
-            )
-            ** 0.5
-        )
+        m = self.Macc.to(units.kg).value
+        G = constants.G.value
+        r = self.r_sep(phase).to(units.m).value
+        c2 = (constants.c**2).value
+        return Quantity(((4 * G * m * r * self.sin_i.value) / c2) ** 0.5, "m")
 
     @property
     def r_roche(self):
@@ -173,13 +189,12 @@ class SelfLensingSystem(object):
         A = self.r_sep(self.periapsis_phase)
         return A * ((0.49 * q23) / (0.6 * q23 + numpy.log(1 + q ** (1.0 / 3.0))))
 
-    @units.quantity_input
+    # @units.quantity_input
     def r_sep(self, phase: units.rad = 0 * units.rad) -> units.m:
         """
         The separation in space between acc and comp at phase
         """
-        # print(self.Macc, self.Mcomp)
-        return self.r(self.Macc, phase) + self.r(self.Mcomp, phase)
+        return (self.r(self.Macc, phase) + self.r(self.Mcomp, phase)).to(units.m)
 
     @property
     def tau_eff(self):
@@ -190,24 +205,34 @@ class SelfLensingSystem(object):
         Astronomical Society 507, no. 1 (11 October 2021): 374–84.
         https://doi.org/10.1093/mnras/stab2135.
         """
-        return (
-            ((self.porb * (self.rE() + self.Rcomp)) / (numpy.pi * self.a * self.sin_i))
-            * (1 - (self.b / self.b_max) ** 2) ** 0.5
+        porb = self.porb.decompose([]).value
+        rE = self.rE().decompose([]).value
+        Rcomp = self.Rcomp.decompose([]).value
+        a = self.a.decompose([]).value
+        b = self.b.decompose([]).value
+        b_max = self.b_max.decompose([]).value
+        sin_i = self.sin_i.decompose([]).value
+        return Quantity(
+            ((porb * (rE + Rcomp)) / (numpy.pi * a * sin_i))
+            * (1 - (b / b_max) ** 2) ** 0.5,
+            "s",
         ).to(units.day)
 
     def time_to_l(self, time):
         return self.phase_to_l(self.time_to_phase(time))
 
     def time_to_b(self, time):
-        return self.phase_to_b(self.time_to_phase(time))
+        p = self.time_to_phase(time)
+        r = self.phase_to_b(p)
+        return r
 
     @units.quantity_input
-    def time_to_phase(self, time: units.day) -> units.rad:
+    def time_to_phase(self, time: units.day):
         """
         Convert time offsets to angular orbital phases.
         """
-        time = time % self.porb
-        return (((time / self.porb).decompose([]) * 2 * numpy.pi)) * units.rad
+        time = time.value % self.porb.value
+        return Quantity((((time / self.porb.value) * 2 * numpy.pi)), units.rad)
 
     @units.quantity_input
     def v(self, m: units.kg, phase: units.rad) -> units.m / units.s:
@@ -233,6 +258,16 @@ class SelfLensingSystem(object):
         return (2 * numpy.pi * self.a / self.porb).to(units.m / units.s)
 
     @units.quantity_input
-    def v_comp(self, phase: units.rad) -> units.m / units.s:
+    def v_comp(self, phase: units.rad):
         # return self.v(self.Mcomp, phase)
-        return (constants.G * self.Macc / self.r_sep(phase)) ** 0.5
+        return Quantity(
+            (
+                (
+                    constants.G.value
+                    * self.Macc.to(units.kg).value
+                    / self.r_sep(phase).to(units.m).value
+                )
+                ** 0.5
+            ),
+            units.m / units.s,
+        )

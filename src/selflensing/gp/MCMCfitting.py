@@ -160,6 +160,7 @@ def _log_posterior_single(
 
     # ---- 1) Base box prior (always active) ----
     lp_bounds = ps.log_prior_bounds(theta, combined_bounds)
+    # jax.debug.print("lp_bounds {x}", x=list(zip(theta, combined_bounds)))
 
     # ---- 2) Define the "True" branch for jax.lax.cond ----
     # This function is *only* called if lp_bounds is finite
@@ -198,8 +199,8 @@ def _log_posterior_single(
     # This correctly branches based on the *traced* value of jnp.isfinite
     return jax.lax.cond(
         jnp.isfinite(lp_bounds),
-        compute_full_logprob,  # Function to run if True
-        return_neg_inf,  # Function to run if False
+        compute_full_logprob,
+        return_neg_inf,
         operand=None,
     )
 
@@ -267,7 +268,7 @@ def make_logposterior_fn(
             log_prior_phys_fn=log_prior_phys_fn,
             kde_lp_fn=kde_lp_fn,
             nhyp=nhyp,
-            noise_measure=float(noise_measure),
+            noise_measure=jnp.array(noise_measure, float),
             combined_bounds=combined_bounds,
             include_lens_mean=int(bool(include_lens_mean)),
             mean_vals=mean_vals,

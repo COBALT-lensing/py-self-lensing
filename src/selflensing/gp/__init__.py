@@ -63,7 +63,7 @@ class TESSGP(BaseGP):
             kernel_fn=kernel_fn,
             T=self.T,
             include_lens_mean=0,
-            noise_measure=float(self.noise_measure),
+            noise_measure=self.noise_measure.astype(float),
         )
 
         return noise_gp.sample(jax.random.key(self.seed))
@@ -78,40 +78,41 @@ class TESSGP(BaseGP):
         test_Mag, noise_measure = ff.conv_mass_to_mag(
             M=sls.Mcomp.value, D_kpc=sls.d.value
         )
-        # print("TESS mag:", float(test_Mag))
 
-        self.mu_test = np.log10(
-            ff.counts_per_cadence_from_mag(float(test_Mag), cadence_s=120.0)
+        self.mu_test = jnp.log10(
+            ff.counts_per_cadence_from_mag(
+                test_Mag.astype(float), cadence_s=self.cadence_s
+            )
         )
 
         # scale white-noise measure to your convention (fractional per cadence)
-        self.noise_measure = float(noise_measure) * (
+        self.noise_measure = noise_measure.astype(float) * (
             10**self.mu_test
         )  # * np.sqrt(60.0/2.0)
 
         # --- build GS kernel hypers directly (physics + μ bands) ---
-        self.lnu_g = np.log10(
-            float(physr.granulation_frequency_relation(self.sls.Mcomp.value))
+        self.lnu_g = jnp.log10(
+            physr.granulation_frequency_relation(self.sls.Mcomp.value).astype(float)
         )  # G: log10 ν_gran [Hz]
-        self.lsig_g = float(
-            ps.expected_log_sigma(jnp.asarray(self.mu_test), "G")
+        self.lsig_g = ps.expected_log_sigma(jnp.asarray(self.mu_test), "G").astype(
+            float
         )  # G: log10 σ_gran
 
-        self.lnu_s = np.log10(
-            float(physr.asteroseismic_frequency_relation(self.sls.Mcomp.value))
+        self.lnu_s = jnp.log10(
+            physr.asteroseismic_frequency_relation(self.sls.Mcomp.value).astype(float)
         )  # S: log10 ν_seis [Hz]
 
-        self.lsig_s = float(
-            ps.expected_log_sigma(jnp.asarray(self.mu_test), "S")
+        self.lsig_s = ps.expected_log_sigma(jnp.asarray(self.mu_test), "S").astype(
+            float
         )  # S: log10 σ_seis
 
-        self.gs_hypers = np.array(
+        self.gs_hypers = jnp.array(
             [self.lnu_g, self.lsig_g, self.lnu_s, self.Q_s, self.lsig_s], dtype=float
         )
 
     @property
     def theta(self):
-        t = np.concatenate(
+        t = jnp.concatenate(
             [
                 jnp.asarray(self.gs_hypers, dtype=float),
                 jnp.array([self.mu_test], dtype=float),
@@ -249,7 +250,7 @@ class TESSGP(BaseGP):
         return mcf.make_emcee_vectorized_logprob(
             kernel_type=self.kernel_type,
             nhyp=self.nhyp,
-            noise_measure=float(self.noise_measure),
+            noise_measure=self.noise_measure.astype(float),
             param_bounds=self.full_bounds,
             # --- KDE Changes ---
             kde3d_args=self.kde_output_tuple,  # <<< Pass the 6-tuple
@@ -272,6 +273,7 @@ class TESSGP(BaseGP):
             mean_vals=self.mean_vals,
         )
 
+        @jax.jit
         def wrapped():
             return single(theta=self.theta, T=self.T, y=self.y)
 
@@ -312,7 +314,7 @@ class TESSGP(BaseGP):
     @observed_lc.setter
     def observed_lc(self, v):
         self._observed_lc = v
-        self.y = jnp.asarray(v, dtype=float)
+        self.y = v
 
     def fit(self):
         sampler_lens = emcee.EnsembleSampler(
