@@ -14,6 +14,7 @@ from .models import SelfLensingSystem
 from .generators import (
     RVGenerator,
     LightcurveGenerator,
+    GPLightcurveGenerator,
     SelfLensingLightcurveGenerator,
 )
 from .gp.PriorsSamplers import log_prior_bounds
@@ -185,24 +186,34 @@ def combined_chi2(
                 )
 
             def calc_lc_chi2():
-                lc_gen = LightcurveGenerator(
-                    new_model_sls,
-                    times=lc_times,
-                    peak_time=peak_time,
-                    lensing_method=lensing_method,
-                )
-
-                def gp_chi2():
-                    new_gp = gp_model(new_model_sls, lc_times.jd, observed_lc)
-                    # new_gp.sls = new_model_sls
-                    new_gp.mean_vals = lc_gen.flux_array
-                    return new_gp.logprob_single()
-
                 def _lc_chi2():
+                    lc_gen = LightcurveGenerator(
+                        new_model_sls,
+                        times=lc_times,
+                        peak_time=peak_time,
+                        lensing_method=lensing_method,
+                    )
                     return chi2(
                         observed_lc,
                         observed_lc_err.value,
                         lc_gen.flux_array,
+                    )
+
+                def gp_chi2():
+                    lc_gen = GPLightcurveGenerator(
+                        new_model_sls,
+                        times=lc_times,
+                        peak_time=peak_time,
+                        lensing_method=lensing_method,
+                        gp=gp_model(new_model_sls, lc_times.jd, observed_lc),
+                    )
+                    # new_gp.sls = new_model_sls
+                    # new_gp.mean_vals = lc_gen.flux_array
+                    lp = lc_gen.gp.logprob_single()
+                    return jax.lax.cond(
+                        jnp.isfinite(lp),
+                        lambda: lp,
+                        _lc_chi2,
                     )
 
                 return jax.lax.cond(

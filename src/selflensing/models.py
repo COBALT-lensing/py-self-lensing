@@ -4,11 +4,15 @@ from jax import numpy as jnp
 from astropy import units, constants
 from unxt import Quantity
 
+import jax
+
 from .gp.PhysicalRelations import (
     stellar_radius_Rsun,
     effective_temperature_K,
 )
 from .gp.FluxFinderSensitivity import conv_mass_to_mag
+
+jax.config.update("jax_enable_x64", True)
 
 
 class SelfLensingSystem(object):
@@ -151,7 +155,7 @@ class SelfLensingSystem(object):
 
     @property
     def porb(self) -> units.day:
-        a = self.a.to(units.m).value.astype(float)
+        a = self.a.to(units.m).value.astype(numpy.float64)
         m = self.Mtot.to(units.kg).value.astype(float)
         G = constants.G.value.astype(float)
         return Quantity((2 * numpy.pi * ((a**3 / (G * m)) ** 0.5)), "s").to(units.day)

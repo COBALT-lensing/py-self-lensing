@@ -83,12 +83,10 @@ class FlatLightcurveGenerator(GeneratorBase):
         self,
         *args,
         baseline=DEFAULT_BASELINE,
-        gp=None,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
         self.baseline = numpy.full(len(self.times), baseline) * self.units
-        self.gp = gp
 
     def __str__(self):
         return "Generated Flat Light Curve"
@@ -115,21 +113,6 @@ class FlatLightcurveGenerator(GeneratorBase):
     @property
     def flux_err_array(self):
         return numpy.full(len(self.times), numpy.nan) * self.units
-
-    @property
-    def gp(self):
-        return self._gp
-
-    @gp.setter
-    def gp(self, v):
-        if v is None:
-            self._gp = None
-        else:
-            if type(v) is type:
-                self._gp = v(self.lensing_system, self.time_offsets)
-            else:
-                self._gp = v
-            self.baseline = self._gp.generate_noise()
 
     @property
     def timeseries(self):
@@ -452,6 +435,37 @@ class LightcurveGenerator(FlatLightcurveGenerator):
             )
 
         return f()
+
+
+class GPLightcurveGenerator(LightcurveGenerator):
+
+    def __init__(self, *args, gp=None, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        self.gp = gp
+        self.baseline = 10**self.gp.mu_test
+        self.gp.mean_vals = super().flux_array  # * 10**self.gp.mu_test
+
+    def __str__(self):
+        pass
+
+    @property
+    def flux_array(self):
+        return self.gp.generate()
+
+    @property
+    def gp(self):
+        return self._gp
+
+    @gp.setter
+    def gp(self, v):
+        if v is None:
+            self._gp = None
+        else:
+            if type(v) is type:
+                self._gp = v(sls=self.lensing_system, lc_times=self.time_offsets)
+            else:
+                self._gp = v
 
 
 class RVGenerator(GeneratorBase):

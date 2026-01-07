@@ -40,10 +40,6 @@ class TESSGP(BaseGP):
     ):
         self.sls = sls
 
-        self.seed = int(time.time()) % (
-            2**32
-        )  # Generate a seed based on the current time
-
         if lc_times is not None:
             self.lc_times = lc_times
         if observed_lc is not None:
@@ -51,22 +47,51 @@ class TESSGP(BaseGP):
         self.mean_vals = mean_vals
         self.nwalkers = nwalkers
 
-    def generate_noise(self):
-        # --- assemble theta and build GP ---
-        # print("theta=", noise_only_theta)
+    @cached_property
+    def model(self):
         nhyp = len(self.gs_hypers)
 
         kernel_fn = lgp.make_kernel_fn(self.kernel_type)
-        noise_gp = lgp.build_model_additive(
+        gp_model = lgp.build_model_additive(
             theta=self.theta,
             nhyp=nhyp,
             kernel_fn=kernel_fn,
             T=self.T,
             include_lens_mean=0,
             noise_measure=self.noise_measure.astype(float),
+            mean_vals=self.mean_vals,
         )
 
-        return noise_gp.sample(jax.random.key(self.seed))
+        return gp_model
+
+    def condition(self, y):
+        r = self.model.condition(y)
+        self.model = r.gp
+        return r.log_probability
+
+    @property
+    def seed(self):
+        prev_seed = getattr(self, "_prev_seed", 0)
+        seed = (int(time.time()) + prev_seed) % (2**32)
+        self._prev_seed = seed
+        return seed
+
+    def generate(self):
+        # --- assemble theta and build GP ---
+        # print("theta=", noise_only_theta)
+        # nhyp = len(self.gs_hypers)
+
+        # kernel_fn = lgp.make_kernel_fn(self.kernel_type)
+        # noise_gp = lgp.build_model_additive(
+        #     theta=self.theta,
+        #     nhyp=nhyp,
+        #     kernel_fn=kernel_fn,
+        #     T=self.T,
+        #     include_lens_mean=0,
+        #     noise_measure=self.noise_measure.astype(float),
+        # )
+
+        return self.model.sample(jax.random.key(self.seed))
 
     @property
     def sls(self):
@@ -130,6 +155,11 @@ class TESSGP(BaseGP):
         self._mean_vals = v
         if hasattr(self, "logprob"):
             del self.logprob
+        if hasattr(self, "model"):
+            del self.model
+
+    def set_mean_amp(self, v):
+        self.mean_vals = self.mu_test * v
 
     @property
     def kernel_bounds(self):
