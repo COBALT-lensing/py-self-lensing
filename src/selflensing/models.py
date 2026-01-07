@@ -263,6 +263,21 @@ class SelfLensingSystem(object):
             "s",
         ).to(units.day)
 
+    @property
+    def tau_sl(self):
+        """
+        Self-lensing duration as defined in Masuda, Kento, and Kenta Hotokezaka. ‘Prospects
+        of Finding Detached Black Hole–Star Binaries with TESS’. The Astrophysical Journal
+        883, no. 2 (2019): 169. https://doi.org/10.3847/1538-4357/ab3a4f.
+        """
+        # TODO: This can't be the correct way to handle the units...
+        Rcomp = self.Rcomp.to(units.R_sun).value
+        porb = self.porb.to(units.day).value
+        Mtot = self.Mtot.to(units.M_sun).value
+        return (
+            1.8 * units.hour * numpy.pi / 4 * porb ** (1 / 3) * Mtot ** (-1 / 3) * Rcomp
+        ).to(units.day)
+
     def time_to_l(self, time):
         return self.phase_to_l(self.time_to_phase(time))
 
