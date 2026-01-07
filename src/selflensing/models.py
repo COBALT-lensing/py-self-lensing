@@ -5,6 +5,7 @@ from astropy import units, constants
 from unxt import Quantity
 
 import jax
+import random
 
 from .gp.PhysicalRelations import (
     stellar_radius_Rsun,
@@ -13,6 +14,16 @@ from .gp.PhysicalRelations import (
 from .gp.FluxFinderSensitivity import conv_mass_to_mag
 
 jax.config.update("jax_enable_x64", True)
+
+DEFAULT_LIMITS = {
+    "a": (0.1, 200),
+    "i": (0.5 * jnp.pi - 0.0001, 0.5 * jnp.pi),
+    "Macc": (0.5, 50),
+    "Mcomp": (0.5, 50),
+    "e": (0, 0.999999),
+    "periapsis_phase": (0, 2 * jnp.pi),
+    "d": (0.1, 100),
+}
 
 
 class SelfLensingSystem(object):
@@ -31,6 +42,36 @@ class SelfLensingSystem(object):
     DEFAULT_E = 0 * units.dimensionless_unscaled
     DEFAULT_I = 0 * units.rad
     DEFAULT_D = 1 * units.kpc
+
+    @classmethod
+    def factory(
+        cls,
+        total=None,
+        **kwargs,
+    ):
+        default_log_dist = ("a", "Macc", "Mcomp")
+        for p in default_log_dist:
+            k = f"{p}_dist"
+            if k not in kwargs:
+                kwargs[k] = "log"
+
+        while True:
+            if total is not None:
+                if total == 0:
+                    break
+                total -= 1
+
+            params = {}
+            for p, (p_min, p_max) in DEFAULT_LIMITS.items():
+                if kwargs.get(f"{p}_dist", "uniform") == "log":
+                    params[p] = (
+                        10 ** random.uniform(numpy.log10(p_min), numpy.log10(p_max))
+                        * cls.param_units[p]
+                    )
+                else:
+                    params[p] = random.uniform(p_min, p_max) * cls.param_units[p]
+
+            yield cls(**params)
 
     @units.quantity_input
     def __init__(

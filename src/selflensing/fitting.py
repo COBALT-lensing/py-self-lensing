@@ -10,7 +10,7 @@ from astropy import units
 from quax import quaxify
 from quaxed import numpy as jnp
 
-from .models import SelfLensingSystem
+from .models import SelfLensingSystem, DEFAULT_LIMITS
 from .generators import (
     RVGenerator,
     LightcurveGenerator,
@@ -20,14 +20,6 @@ from .generators import (
 from .gp.PriorsSamplers import log_prior_bounds
 
 warnings.filterwarnings("ignore", module="erfa.core")
-
-FIT_LIMITS = {
-    "a": (0.01, 200),
-    "i": (1.4, 0.5 * jnp.pi),
-    "Macc": (0.5, 50),
-    "e": (0, 0.999999),
-    "periapsis_phase": (0, 2 * jnp.pi),
-}
 
 
 def gauss_lnprior(x, mu, sigma=None):
@@ -60,23 +52,23 @@ def combined_chi2(
     period_max=None,
     model_sls=None,
 ):
-    # if a < FIT_LIMITS["a"][0] or a > FIT_LIMITS["a"][1]:
+    # if a < DEFAULT_LIMITS["a"][0] or a > DEFAULT_LIMITS["a"][1]:
     #     return -jnp.inf
 
-    # if i < FIT_LIMITS["i"][0] or i > FIT_LIMITS["i"][1]:
+    # if i < DEFAULT_LIMITS["i"][0] or i > DEFAULT_LIMITS["i"][1]:
     #     return -jnp.inf
 
-    # if Macc < FIT_LIMITS["Macc"][0] or Macc > FIT_LIMITS["Macc"][1]:
+    # if Macc < DEFAULT_LIMITS["Macc"][0] or Macc > DEFAULT_LIMITS["Macc"][1]:
     #     return -jnp.inf
 
     # if (
-    #     periapsis_phase < FIT_LIMITS["periapsis_phase"][0]
-    #     or periapsis_phase > FIT_LIMITS["periapsis_phase"][1]
+    #     periapsis_phase < DEFAULT_LIMITS["periapsis_phase"][0]
+    #     or periapsis_phase > DEFAULT_LIMITS["periapsis_phase"][1]
     # ):
     #     return -jnp.inf
 
     # # e = 1 is parabolic, so less than but not equal
-    # if e < FIT_LIMITS["e"][0] or e >= FIT_LIMITS["e"][1]:
+    # if e < DEFAULT_LIMITS["e"][0] or e >= DEFAULT_LIMITS["e"][1]:
     #     return -jnp.inf
 
     Mcomp = unxt.Quantity(Mcomp, SelfLensingSystem.param_units["Mcomp"])
@@ -89,11 +81,11 @@ def combined_chi2(
     lp_bounds = log_prior_bounds(
         params,
         (
-            FIT_LIMITS["a"],
-            FIT_LIMITS["i"],
-            FIT_LIMITS["Macc"],
-            FIT_LIMITS["e"],
-            FIT_LIMITS["periapsis_phase"],
+            DEFAULT_LIMITS["a"],
+            DEFAULT_LIMITS["i"],
+            DEFAULT_LIMITS["Macc"],
+            DEFAULT_LIMITS["e"],
+            DEFAULT_LIMITS["periapsis_phase"],
         ),
     )
 
@@ -382,16 +374,18 @@ def self_lensing_system_from_fit(
     p0 = [
         numpy.random.uniform(bounds[0], bounds[1], nwalkers)
         for bounds in (
-            FIT_LIMITS["i"],
-            FIT_LIMITS["Macc"],
-            FIT_LIMITS["e"],
-            FIT_LIMITS["periapsis_phase"],
+            DEFAULT_LIMITS["i"],
+            DEFAULT_LIMITS["Macc"],
+            DEFAULT_LIMITS["e"],
+            DEFAULT_LIMITS["periapsis_phase"],
         )
     ]
     p0.insert(
         0,
         jnp.logspace(
-            jnp.log10(FIT_LIMITS["a"][0]), jnp.log10(FIT_LIMITS["a"][1]), nwalkers
+            jnp.log10(DEFAULT_LIMITS["a"][0]),
+            jnp.log10(DEFAULT_LIMITS["a"][1]),
+            nwalkers,
         ),
     )
 

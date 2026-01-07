@@ -8,7 +8,8 @@ from astropy import units, constants
 import jax
 from jax import numpy as jnp
 
-from src.selflensing.lensing import wm_callback
+from .lensing import wm_callback
+from .models import SelfLensingSystem
 
 # from src.selflensing.gp.LensingGP import _run_nucs_safe
 
@@ -341,6 +342,11 @@ class LightcurveGenerator(FlatLightcurveGenerator):
     Stellar-Compact Object Binary Systems for Mass Determinations’, The Astrophysical
     Journal 936, no. 1 (August 2022): 63, https://doi.org/10.3847/1538-4357/ac82b7.
     """
+
+    @classmethod
+    def factory(cls, total=None, **kwargs):
+        for lensing_system in SelfLensingSystem.factory(total=total):
+            yield cls(lensing_system=lensing_system, **kwargs)
 
     def __init__(
         self,
