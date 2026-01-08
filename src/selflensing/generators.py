@@ -125,6 +125,26 @@ class FlatLightcurveGenerator(GeneratorBase):
             }
         )
         ts.primary_key = ("time",)
+        ts.meta.update(
+            {
+                "sim_a": float(self.lensing_system.a.value.astype(float)),
+                "sim_i": float(self.lensing_system.i.value.astype(float)),
+                "sim_Mbh": float(self.lensing_system.Macc.value.astype(float)),
+                "sim_Rst": float(self.lensing_system.Rcomp.value.astype(float)),
+                "sim_Mst": float(self.lensing_system.Mcomp.value.astype(float)),
+                "sim_Teff": float(self.lensing_system.Teff.value.astype(float)),
+                "sim_e": float(self.lensing_system.e.value.astype(float)),
+                "sim_peri": float(
+                    self.lensing_system.periapsis_phase.value.astype(float)
+                ),
+                "sim_d": float(self.lensing_system.d.value.astype(float)),
+                "sim_P": float(self.lensing_system.porb.value.astype(float)),
+                "sim_b": float(self.lensing_system.b.value.astype(float)),
+                "sim_taue": float(self.lensing_system.tau_eff.value.astype(float)),
+                "sim_taus": float(self.lensing_system.tau_sl.value.astype(float)),
+                "sim_peak": self.peak_time.jd,
+            }
+        )
         return ts
 
 
