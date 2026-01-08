@@ -444,6 +444,15 @@ class LightcurveGenerator(FlatLightcurveGenerator):
 
 
 class GPLightcurveGenerator(LightcurveGenerator):
+    @classmethod
+    def factory(cls, gp=None, total=None, **kwargs):
+        for lensing_system in SelfLensingSystem.factory(total=total):
+            if type(gp) is type:
+                gp = gp(sls=lensing_system)
+            lcg = cls(lensing_system=lensing_system, gp=gp, **kwargs)
+            gp.lensing_system = lensing_system
+            gp.lc_times = lcg.time_offsets
+            yield lcg
 
     def __init__(self, *args, gp=None, **kwargs):
         super().__init__(*args, **kwargs)
