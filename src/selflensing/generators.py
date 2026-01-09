@@ -116,6 +116,35 @@ class FlatLightcurveGenerator(GeneratorBase):
         return numpy.full(len(self.times), numpy.nan) * self.units
 
     @property
+    def meta(self):
+        return {
+            "a": float(self.lensing_system.a.value.astype(float)),
+            "i": float(self.lensing_system.i.value.astype(float)),
+            "Mbh": float(self.lensing_system.Macc.value.astype(float)),
+            "Rstar": float(self.lensing_system.Rcomp.value.astype(float)),
+            "Mstar": float(self.lensing_system.Mcomp.value.astype(float)),
+            "Teff": float(self.lensing_system.Teff.value.astype(float)),
+            "e": float(self.lensing_system.e.value.astype(float)),
+            "peri": float(self.lensing_system.periapsis_phase.value.astype(float)),
+            "d": float(self.lensing_system.d.value.astype(float)),
+            "P": float(self.lensing_system.porb.value.astype(float)),
+            "b": float(self.lensing_system.b.value.astype(float)),
+            "tau_eff": float(self.lensing_system.tau_eff.value.astype(float)),
+            "tau_sl": float(self.lensing_system.tau_sl.value.astype(float)),
+            "peak_t": self.peak_time.jd,
+        }
+
+    # @property
+    # def lensing_system(self):
+    #     return self._lensing_system
+
+    # @lensing_system.setter
+    # def lensing_system(self, v):
+    #     self._lensing_system = v
+    #     if hasattr(self, "amplification"):
+    #         del self.amplification
+
+    @property
     def timeseries(self):
         ts = TimeSeries(
             data={
@@ -125,26 +154,7 @@ class FlatLightcurveGenerator(GeneratorBase):
             }
         )
         ts.primary_key = ("time",)
-        ts.meta.update(
-            {
-                "sim_a": float(self.lensing_system.a.value.astype(float)),
-                "sim_i": float(self.lensing_system.i.value.astype(float)),
-                "sim_Mbh": float(self.lensing_system.Macc.value.astype(float)),
-                "sim_Rst": float(self.lensing_system.Rcomp.value.astype(float)),
-                "sim_Mst": float(self.lensing_system.Mcomp.value.astype(float)),
-                "sim_Teff": float(self.lensing_system.Teff.value.astype(float)),
-                "sim_e": float(self.lensing_system.e.value.astype(float)),
-                "sim_peri": float(
-                    self.lensing_system.periapsis_phase.value.astype(float)
-                ),
-                "sim_d": float(self.lensing_system.d.value.astype(float)),
-                "sim_P": float(self.lensing_system.porb.value.astype(float)),
-                "sim_b": float(self.lensing_system.b.value.astype(float)),
-                "sim_taue": float(self.lensing_system.tau_eff.value.astype(float)),
-                "sim_taus": float(self.lensing_system.tau_sl.value.astype(float)),
-                "sim_peak": self.peak_time.jd,
-            }
-        )
+        ts.meta.update(self.meta)
         return ts
 
 
@@ -183,13 +193,21 @@ class DopplerBoostingLightcurveGenerator(FlatLightcurveGenerator):
             self.lensing_system, times=self.times, peak_time=self.peak_time
         )
         rv = rvg.rv.to(units.m / units.s)
-        r = (
+        return (
             (3 - self.alpha)
             * (rv.value / constants.c.value)
             * self.lensing_system.sin_i.value
         )
-        print("db r", type(r), r)
-        return r
+
+    @property
+    def meta(self):
+        m = super().meta
+        m.update(
+            {
+                "amp_db": float(max(self.amplification).astype(float)),
+            }
+        )
+        return m
 
     @property
     def flux_array(self):
@@ -242,6 +260,16 @@ class EllipsoidalVariationsLightcurveGenerator(FlatLightcurveGenerator):
         return 0.15 * (1 + self.g) * (15 + self.gamma) / (3 - self.gamma)
 
     @property
+    def meta(self):
+        m = super().meta
+        m.update(
+            {
+                "amp_el": float(max(self.amplification).astype(float)),
+            }
+        )
+        return m
+
+    @property
     def flux_array(self):
         return self.baseline * (1 + self.amplification)
 
@@ -261,6 +289,16 @@ class SelfLensingLightcurveGenerator(FlatLightcurveGenerator):
 
     def __str__(self):
         return "Generated Self Lensing Light Curve"
+
+    @property
+    def meta(self):
+        m = super().meta
+        m.update(
+            {
+                "amp_sl": float(max(self.amplification).astype(float)),
+            }
+        )
+        return m
 
     @property
     def amplification(self):
@@ -300,14 +338,6 @@ class SelfLensingLightcurveGenerator(FlatLightcurveGenerator):
                 ),
             ),
         )
-        # if (
-        #     rE is not None
-        #     and not jnp.isinf(rE.value)
-        #     and not jnp.isnan(rE.value)
-        #     and not jnp.isnan(self.lensing_system.b.value)
-        # ):
-        #     return getattr(self, self.lensing_methods[self.lensing_method])
-        # return super().amplification
 
     @property
     def heyrovsky_amplification(self):
@@ -438,6 +468,14 @@ class LightcurveGenerator(FlatLightcurveGenerator):
             self.db.lensing_system = ls
 
     @property
+    def meta(self):
+        m = super().meta
+        m.update(self.sl.meta)
+        m.update(self.ev.meta)
+        m.update(self.db.meta)
+        return m
+
+    @property
     def peak_time(self):
         return self._peak_time
 
@@ -453,7 +491,6 @@ class LightcurveGenerator(FlatLightcurveGenerator):
 
     @property
     def amplification(self):
-
         @jax.jit
         def f():
             return self.sl.amplification * (
