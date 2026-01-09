@@ -47,6 +47,8 @@ class SelfLensingSystem(object):
     def factory(
         cls,
         total=None,
+        rlof=False,
+        sl_possible=True,
         **kwargs,
     ):
         default_log_dist = ("a", "Macc", "Mcomp")
@@ -56,11 +58,6 @@ class SelfLensingSystem(object):
                 kwargs[k] = "log"
 
         while True:
-            if total is not None:
-                if total == 0:
-                    break
-                total -= 1
-
             params = {}
             for p, (p_min, p_max) in DEFAULT_LIMITS.items():
                 if kwargs.get(f"{p}_dist", "uniform") == "log":
@@ -71,7 +68,15 @@ class SelfLensingSystem(object):
                 else:
                     params[p] = random.uniform(p_min, p_max) * cls.param_units[p]
 
-            yield cls(**params)
+            sls = cls(**params)
+
+            if (rlof or not sls.rlof) and (not sl_possible or sls.sl_possible):
+                yield sls
+
+                if total is not None:
+                    if total == 0:
+                        break
+                    total -= 1
 
     @units.quantity_input
     def __init__(
@@ -145,6 +150,10 @@ class SelfLensingSystem(object):
         https://doi.org/10.1093/mnras/stab2135.
         """
         return (1 + self.Rcomp / self.rE()).decompose([])
+
+    @property
+    def sl_possible(self):
+        return self.b <= self.b_max
 
     @property
     def b_source(self):
@@ -233,6 +242,10 @@ class SelfLensingSystem(object):
         q23 = q ** (2.0 / 3.0)
         A = self.r_sep(self.periapsis_phase)
         return A * ((0.49 * q23) / (0.6 * q23 + numpy.log(1 + q ** (1.0 / 3.0))))
+
+    @property
+    def rlof(self):
+        return self.r_roche <= self.Rcomp
 
     # @units.quantity_input
     def r_sep(self, phase: units.rad = 0 * units.rad) -> units.m:
