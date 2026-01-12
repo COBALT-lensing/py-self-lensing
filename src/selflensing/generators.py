@@ -394,8 +394,10 @@ class LightcurveGenerator(FlatLightcurveGenerator):
     """
 
     @classmethod
-    def factory(cls, total=None, **kwargs):
-        for lensing_system in SelfLensingSystem.factory(total=total):
+    def factory(cls, total=None, param_samples=None, **kwargs):
+        for lensing_system in SelfLensingSystem.factory(
+            total=total, param_samples=param_samples
+        ):
             yield cls(lensing_system=lensing_system, **kwargs)
 
     def __init__(
@@ -502,8 +504,10 @@ class LightcurveGenerator(FlatLightcurveGenerator):
 
 class GPLightcurveGenerator(LightcurveGenerator):
     @classmethod
-    def factory(cls, gp=None, total=None, **kwargs):
-        for lensing_system in SelfLensingSystem.factory(total=total):
+    def factory(cls, gp=None, total=None, param_samples=None, **kwargs):
+        for lensing_system in SelfLensingSystem.factory(
+            total=total, param_samples=param_samples
+        ):
             if type(gp) is type:
                 gp = gp(sls=lensing_system)
             lcg = cls(lensing_system=lensing_system, gp=gp, **kwargs)

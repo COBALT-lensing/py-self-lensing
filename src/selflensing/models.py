@@ -46,37 +46,49 @@ class SelfLensingSystem(object):
     @classmethod
     def factory(
         cls,
-        total=None,
+        total,
         rlof=False,
         sl_possible=True,
+        param_samples=None,
         **kwargs,
     ):
-        default_log_dist = ("a", "Macc", "Mcomp")
+        default_log_dist = ("a", "Macc", "Mcomp", "e")
+
         for p in default_log_dist:
             k = f"{p}_dist"
             if k not in kwargs:
                 kwargs[k] = "log"
 
-        while True:
+        while total > 0:
             params = {}
+            if param_samples is not None:
+                params = param_samples.sample(1).to_dict("records")[0]
+
             for p, (p_min, p_max) in DEFAULT_LIMITS.items():
+
+                if p in params:
+                    continue
                 if kwargs.get(f"{p}_dist", "uniform") == "log":
-                    params[p] = (
-                        10 ** random.uniform(numpy.log10(p_min), numpy.log10(p_max))
-                        * cls.param_units[p]
+                    offset_limits = p_min == 0
+                    if offset_limits:
+                        p_min += 1
+                        p_max += 1
+                    params[p] = 10 ** random.uniform(
+                        numpy.log10(p_min), numpy.log10(p_max)
                     )
+                    if offset_limits:
+                        params[p] -= 1
                 else:
-                    params[p] = random.uniform(p_min, p_max) * cls.param_units[p]
+                    params[p] = random.uniform(p_min, p_max)
+
+            for p, v in params.items():
+                params[p] = v * cls.param_units[p]
 
             sls = cls(**params)
 
             if (rlof or not sls.rlof) and (not sl_possible or sls.sl_possible):
                 yield sls
-
-                if total is not None:
-                    if total == 0:
-                        break
-                    total -= 1
+                total -= 1
 
     @units.quantity_input
     def __init__(
