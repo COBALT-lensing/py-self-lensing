@@ -52,7 +52,7 @@ class SelfLensingSystem(object):
         param_samples=None,
         **kwargs,
     ):
-        default_log_dist = ("a", "Macc", "Mcomp", "e")
+        default_log_dist = ("a", "e")
 
         for p in default_log_dist:
             k = f"{p}_dist"
