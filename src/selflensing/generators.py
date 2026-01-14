@@ -526,6 +526,19 @@ class GPLightcurveGenerator(LightcurveGenerator):
         pass
 
     @property
+    def meta(self):
+        m = super().meta
+        m.update(
+            {
+                "mu": self.gp.model.loc,
+                "std": numpy.sqrt(self.gp.model.variance),
+            }
+        )
+        m.update(self.ev.meta)
+        m.update(self.db.meta)
+        return m
+
+    @property
     def flux_array(self):
         return self.gp.generate()
 
