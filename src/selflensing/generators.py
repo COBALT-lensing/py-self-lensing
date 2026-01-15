@@ -20,7 +20,7 @@ class GeneratorBase(object):
 
     def __init__(
         self,
-        lensing_system=None,
+        lensing_system,
         times=None,
         start_time=None,
         end_time=None,
@@ -394,11 +394,11 @@ class LightcurveGenerator(FlatLightcurveGenerator):
     """
 
     @classmethod
-    def factory(cls, total=None, param_samples=None, **kwargs):
+    def factory(cls, *args, total=None, param_samples=None, **kwargs):
         for lensing_system in SelfLensingSystem.factory(
             total=total, param_samples=param_samples
         ):
-            yield cls(lensing_system=lensing_system, **kwargs)
+            yield cls(*args, lensing_system=lensing_system, **kwargs)
 
     def __init__(
         self,
@@ -504,20 +504,23 @@ class LightcurveGenerator(FlatLightcurveGenerator):
 
 class GPLightcurveGenerator(LightcurveGenerator):
     @classmethod
-    def factory(cls, gp=None, total=None, param_samples=None, **kwargs):
+    def factory(
+        cls, lensing_system, gp, *args, total=None, param_samples=None, **kwargs
+    ):
         for lensing_system in SelfLensingSystem.factory(
             total=total, param_samples=param_samples
         ):
             if type(gp) is type:
                 gp = gp(sls=lensing_system)
-            lcg = cls(lensing_system=lensing_system, gp=gp, **kwargs)
+            lcg = cls(lensing_system, gp, *args, **kwargs)
             gp.lensing_system = lensing_system
             gp.lc_times = lcg.time_offsets
             yield lcg
 
-    def __init__(self, *args, gp=None, **kwargs):
-        super().__init__(*args, **kwargs)
+    def __init__(self, lensing_system, gp, *args, kernel_type=None, **kwargs):
+        super().__init__(lensing_system, *args, **kwargs)
 
+        self.kernel_type = kernel_type
         self.gp = gp
         self.baseline = 10**self.gp.mu_test
         self.gp.mean_vals = super().flux_array  # * 10**self.gp.mu_test
@@ -553,7 +556,13 @@ class GPLightcurveGenerator(LightcurveGenerator):
             self._gp = None
         else:
             if type(v) is type:
-                self._gp = v(sls=self.lensing_system, lc_times=self.time_offsets)
+                if self.kernel_type is None:
+                    self.kernel_type = v.default_kernel_type
+                self._gp = v(
+                    sls=self.lensing_system,
+                    lc_times=self.time_offsets,
+                    kernel_type=self.kernel_type,
+                )
             else:
                 self._gp = v
 

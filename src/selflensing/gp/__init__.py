@@ -7,6 +7,7 @@ import emcee
 import jax.numpy as jnp
 
 import os
+import random
 import time
 
 from . import (
@@ -29,15 +30,23 @@ class TESSGP(BaseGP):
         f"{PWD}/data/Disk_f40_TESS_output.csv.gz",
         f"{PWD}/data/Bulge_f40_TESS_output.csv.gz",
     ]
-    kernel_type = "GS"
+    default_kernel_type = "GS"
     mu_bounds = [(0.0, 7.0)]  # log10 μ
     cadence_s = 600.0
     use_kde_flag = True
     Q_s = 5.0  # S: quality factor (broad)
+    log_tau_f_bounds = (2, 6.5)
 
     def __init__(
-        self, sls, lc_times=None, observed_lc=None, mean_vals=None, nwalkers=None
+        self,
+        sls,
+        lc_times=None,
+        observed_lc=None,
+        mean_vals=None,
+        nwalkers=None,
+        kernel_type=default_kernel_type,
     ):
+        self.kernel_type = kernel_type
         self.sls = sls
 
         if lc_times is not None:
@@ -49,7 +58,7 @@ class TESSGP(BaseGP):
 
     @cached_property
     def model(self):
-        nhyp = len(self.gs_hypers)
+        nhyp = len(self.theta) - 1
 
         kernel_fn = lgp.make_kernel_fn(self.kernel_type)
         gp_model = lgp.build_model_additive(
@@ -116,35 +125,58 @@ class TESSGP(BaseGP):
         )  # * np.sqrt(60.0/2.0)
 
         # --- build GS kernel hypers directly (physics + μ bands) ---
-        self.lnu_g = jnp.log10(
-            physr.granulation_frequency_relation(self.sls.Mcomp.value).astype(float)
-        )  # G: log10 ν_gran [Hz]
-        self.lsig_g = ps.expected_log_sigma(jnp.asarray(self.mu_test), "G").astype(
-            float
-        )  # G: log10 σ_gran
+        if "G" in self.kernel_type:
+            self.lnu_g = jnp.log10(
+                physr.granulation_frequency_relation(self.sls.Mcomp.value).astype(float)
+            )  # G: log10 ν_gran [Hz]
+            self.lsig_g = ps.expected_log_sigma(jnp.asarray(self.mu_test), "G").astype(
+                float
+            )  # G: log10 σ_gran
+            self.g_hypers = jnp.array(
+                [
+                    self.lnu_g,
+                    self.lsig_g,
+                ],
+                dtype=float,
+            )
+        else:
+            self.g_hypers = jnp.array([])
 
-        self.lnu_s = jnp.log10(
-            physr.asteroseismic_frequency_relation(self.sls.Mcomp.value).astype(float)
-        )  # S: log10 ν_seis [Hz]
+        if "S" in self.kernel_type:
+            self.lnu_s = jnp.log10(
+                physr.asteroseismic_frequency_relation(self.sls.Mcomp.value).astype(
+                    float
+                )
+            )  # S: log10 ν_seis [Hz]
 
-        self.lsig_s = ps.expected_log_sigma(jnp.asarray(self.mu_test), "S").astype(
-            float
-        )  # S: log10 σ_seis
+            self.lsig_s = ps.expected_log_sigma(jnp.asarray(self.mu_test), "S").astype(
+                float
+            )  # S: log10 σ_seis
 
-        self.gs_hypers = jnp.array(
-            [self.lnu_g, self.lsig_g, self.lnu_s, self.Q_s, self.lsig_s], dtype=float
-        )
+            self.s_hypers = jnp.array([self.lnu_s, self.Q_s, self.lsig_s], dtype=float)
+        else:
+            self.s_hypers = jnp.array([])
+
+        if "F" in self.kernel_type:
+            self.f_hypers = jnp.array(
+                [
+                    10 ** random.uniform(*self.log_tau_f_bounds),
+                    ps.expected_log_sigma(jnp.asarray(self.mu_test), "F"),
+                ]
+            )
+        else:
+            self.f_hypers = jnp.array([])
 
     @property
     def theta(self):
-        t = jnp.concatenate(
+        return jnp.concatenate(
             [
-                jnp.asarray(self.gs_hypers, dtype=float),
+                jnp.asarray(self.g_hypers, dtype=float),
+                jnp.asarray(self.s_hypers, dtype=float),
+                jnp.asarray(self.f_hypers, dtype=float),
                 jnp.array([self.mu_test], dtype=float),
             ]
         )
-        # print("theta=", t)
-        return t
 
     @property
     def mean_vals(self):
