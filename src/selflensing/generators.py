@@ -504,9 +504,7 @@ class LightcurveGenerator(FlatLightcurveGenerator):
 
 class GPLightcurveGenerator(LightcurveGenerator):
     @classmethod
-    def factory(
-        cls, lensing_system, gp, *args, total=None, param_samples=None, **kwargs
-    ):
+    def factory(cls, gp, *args, total=None, param_samples=None, **kwargs):
         for lensing_system in SelfLensingSystem.factory(
             total=total, param_samples=param_samples
         ):
