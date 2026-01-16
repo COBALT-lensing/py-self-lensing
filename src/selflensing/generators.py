@@ -148,7 +148,7 @@ class FlatLightcurveGenerator(GeneratorBase):
     def timeseries(self):
         ts = TimeSeries(
             data={
-                "time": self.times,
+                "time": self.times.jd,
                 "flux": self.flux_array,
                 "flux_err": self.flux_err_array,
             }
