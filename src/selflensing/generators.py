@@ -522,6 +522,7 @@ class GPLightcurveGenerator(LightcurveGenerator):
         self.gp = gp
         self.baseline = 10**self.gp.mu_test
         self.gp.mean_vals = super().flux_array  # * 10**self.gp.mu_test
+        self.gp.kernel_type = self.kernel_type
 
     def __str__(self):
         pass
@@ -550,12 +551,13 @@ class GPLightcurveGenerator(LightcurveGenerator):
 
     @gp.setter
     def gp(self, v):
+        if self.kernel_type is None:
+            self.kernel_type = v.default_kernel_type
         if v is None:
             self._gp = None
         else:
             if type(v) is type:
-                if self.kernel_type is None:
-                    self.kernel_type = v.default_kernel_type
+
                 self._gp = v(
                     sls=self.lensing_system,
                     lc_times=self.time_offsets,
@@ -563,6 +565,7 @@ class GPLightcurveGenerator(LightcurveGenerator):
                 )
             else:
                 self._gp = v
+                self._gp.kernel_type = self.kernel_type
 
 
 class RVGenerator(GeneratorBase):

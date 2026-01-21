@@ -103,12 +103,29 @@ class TESSGP(BaseGP):
         return self.model.sample(jax.random.key(self.seed))
 
     @property
+    def kernel_type(self):
+        return self._kernel_type
+
+    @kernel_type.setter
+    def kernel_type(self, v):
+        self._kernel_type = v
+        if hasattr(self, "logprob"):
+            del self.logprob
+        if hasattr(self, "model"):
+            del self.model
+
+    @property
     def sls(self):
         return self._sls
 
     @sls.setter
     def sls(self, sls):
         self._sls = sls
+        if hasattr(self, "logprob"):
+            del self.logprob
+        if hasattr(self, "model"):
+            del self.model
+
         test_Mag, noise_measure = ff.conv_mass_to_mag(
             M=sls.Mcomp.value, D_kpc=sls.d.value
         )
