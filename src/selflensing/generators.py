@@ -530,13 +530,16 @@ class GPLightcurveGenerator(LightcurveGenerator):
     @property
     def meta(self):
         m = super().meta
+        mean_cv = float(
+            numpy.mean(numpy.sqrt(self.gp.model.variance) / self.gp.model.loc).astype(
+                float
+            )
+        )
+        visibility = m["amp_sl"] - 1.0 - mean_cv
         m.update(
             {
-                "mean_cv": float(
-                    numpy.mean(
-                        numpy.sqrt(self.gp.model.variance) / self.gp.model.loc
-                    ).astype(float)
-                ),
+                "mean_cv": mean_cv,
+                "visibility": visibility,
             }
         )
         return m
