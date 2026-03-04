@@ -539,7 +539,7 @@ class GPLightcurveGenerator(LightcurveGenerator):
         m.update(
             {
                 "mean_cv": mean_cv,
-                "visibility": visibility,
+                "vis": visibility,
             }
         )
         return m
