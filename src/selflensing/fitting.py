@@ -173,14 +173,9 @@ def combined_chi2(
                 (period_min is None or new_model_sls.porb >= period_min)
                 and (period_max is None or new_model_sls.porb <= period_max)
                 and (
-                    (
-                        (tau_eff is None or numpy.isnan(tau_eff))
-                        and jnp.isnan(new_model_sls.tau_eff)
-                    )
-                    or (
-                        (tau_eff is not None and not numpy.isnan(tau_eff))
-                        and jnp.isfinite(new_model_sls.tau_eff.value)
-                    )
+                    tau_eff is None
+                    or numpy.isnan(tau_eff)
+                    or jnp.isfinite(new_model_sls.tau_eff.value)
                 )
             )
 
@@ -203,13 +198,16 @@ def combined_chi2(
                 detected_periods,
             )
 
-            tau_eff_err = jax.lax.cond(
-                tau_eff is not None and not numpy.isnan(tau_eff),
-                tau_eff_prior,
-                zero,
-                new_model_sls.tau_eff,
-                tau_eff,
-            )
+            if tau_eff is None:
+                tau_eff_err = zero()
+            else:
+                tau_eff_err = jax.lax.cond(
+                    not numpy.isnan(tau_eff),
+                    tau_eff_prior,
+                    zero,
+                    new_model_sls.tau_eff,
+                    tau_eff,
+                )
 
             def calc_rv_chi2():
                 rv_gen = RVGenerator(new_model_sls, times=rv_times, peak_time=peak_time)
