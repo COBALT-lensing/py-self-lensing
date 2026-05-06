@@ -18,6 +18,53 @@ Though while the repo is private you'll likely need to use SSH:
 pip install git+ssh://git@github.com/COBALT-lensing/py-self-lensing.git
 ```
 
+### GPU support
+
+Fitting uses JAX for the vectorised likelihood calculation. A normal install uses
+JAX's CPU backend, but if a GPU-enabled JAX backend is installed the fitter will
+prefer it automatically.
+
+For development installs with Poetry, install one of the optional GPU groups:
+
+```shell
+poetry install --with cuda
+```
+
+`cuda` is an alias for the current recommended NVIDIA CUDA 13 wheels. Other
+available groups are:
+
+```shell
+poetry install --with cuda13
+poetry install --with cuda12
+poetry install --with cuda13-local
+poetry install --with cuda12-local
+poetry install --with rocm
+```
+
+Use the `*-local` groups only when CUDA and cuDNN are already installed on the
+machine. Otherwise prefer `cuda`/`cuda13`, which install the NVIDIA CUDA
+libraries from Python wheels.
+
+For pip installs, request the matching package extra:
+
+```shell
+pip install "git+https://github.com/COBALT-lensing/py-self-lensing.git#egg=selflensing[cuda]"
+```
+
+Check which backend JAX can see with:
+
+```shell
+python -c "import jax; print(jax.devices())"
+```
+
+The fitting function also accepts explicit device controls:
+
+```python
+self_lensing_system_from_fit(..., prefer_gpu=True)  # default
+self_lensing_system_from_fit(..., device="gpu:0")
+self_lensing_system_from_fit(..., prefer_gpu=False)  # force CPU fallback
+```
+
 ## Generating light curves and RV
 
 The first step is to define the properties of your self-lensing system:

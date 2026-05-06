@@ -1,6 +1,7 @@
 # import copy
 import emcee
 import jax
+import jax.numpy as jax_numpy
 import logging
 import numpy
 import unxt
@@ -20,6 +21,45 @@ from .generators import (
 from .gp.PriorsSamplers import log_prior_bounds
 
 warnings.filterwarnings("ignore", module="erfa.core")
+
+
+def _jax_devices(platform):
+    try:
+        return jax.devices(platform)
+    except RuntimeError:
+        return []
+
+
+def _select_fit_device(device=None, prefer_gpu=True):
+    if device is not None and hasattr(device, "platform"):
+        return device
+
+    if device is None or str(device).lower() == "auto":
+        gpu_devices = _jax_devices("gpu") if prefer_gpu else []
+        return gpu_devices[0] if gpu_devices else jax.devices()[0]
+
+    device_name = str(device).lower()
+    platform, _, device_id = device_name.partition(":")
+    if platform == "cuda":
+        platform = "gpu"
+
+    devices = _jax_devices(platform)
+    if not devices:
+        raise RuntimeError(f"No JAX {platform!r} devices are available")
+
+    if device_id:
+        try:
+            return devices[int(device_id)]
+        except (ValueError, IndexError) as exc:
+            raise RuntimeError(f"No JAX {platform!r} device with index {device_id}") from exc
+
+    return devices[0]
+
+
+def _device_array(value, device):
+    if value is None:
+        return None
+    return jax.device_put(jax_numpy.asarray(value), device)
 
 
 def gauss_lnprior(x, mu, sigma=None):
@@ -290,12 +330,21 @@ def make_combined_chi2_vec(
     period_min=None,
     period_max=None,
     model_sls=None,
+    device=None,
 ):
+    Mcomp = _device_array(Mcomp, device)
+    Rcomp = _device_array(Rcomp, device)
+    tau_eff = _device_array(tau_eff, device)
+    d = _device_array(d, device)
+    observed_rv = _device_array(observed_rv, device)
+    observed_rv_err = _device_array(observed_rv_err, device)
+    observed_lc = _device_array(observed_lc, device)
+    observed_lc_err = _device_array(observed_lc_err, device)
+    detected_periods = _device_array(detected_periods, device)
 
-    @jax.jit
     @quaxify
-    def combined_chi2_vec(params):
-        params = jnp.asarray(params)
+    def _combined_chi2_vec(params):
+        params = jax.device_put(jax_numpy.asarray(params), device)
         return jnp.asarray(
             jax.vmap(
                 lambda p: combined_chi2(
@@ -322,7 +371,14 @@ def make_combined_chi2_vec(
             )(params)
         )
 
-    return combined_chi2_vec
+    combined_chi2_vec = jax.jit(_combined_chi2_vec, device=device)
+
+    def logprob(params):
+        # emcee feeds/consumes NumPy; keep the vectorized likelihood on the
+        # selected JAX device, then transfer just the log-probabilities back.
+        return numpy.asarray(combined_chi2_vec(params))
+
+    return logprob
 
 
 @units.quantity_input
@@ -352,10 +408,19 @@ def self_lensing_system_from_fit(
     lensing_method=SelfLensingLightcurveGenerator.DEFAULT_LENSING_METHOD,
     pool=None,
     progress=True,
+    prefer_gpu=True,
+    device=None,
 ):
     logging.debug(f"fit: nwalkers={nwalkers}, nsteps={nsteps}")
     if observed_rv is None and observed_lc is None:
         raise RuntimeError("You must provide at least one of observed_rv, observed_ts")
+
+    fit_device = _select_fit_device(device=device, prefer_gpu=prefer_gpu)
+    logging.info(
+        "fit: using JAX %s device %s",
+        fit_device.platform,
+        fit_device,
+    )
 
     default_sls = SelfLensingSystem(
         0 * SelfLensingSystem.param_units["Macc"],
@@ -382,7 +447,7 @@ def self_lensing_system_from_fit(
         ),
     )
 
-    p0 = list(zip(*p0))
+    p0 = numpy.asarray(list(zip(*p0)), dtype=float)
 
     # gp = None
     # if gp_model is not None:
@@ -476,6 +541,7 @@ def self_lensing_system_from_fit(
         period_min,
         period_max,
         default_sls,
+        fit_device,
     )
 
     # try:
