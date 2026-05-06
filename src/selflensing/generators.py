@@ -4,12 +4,13 @@ import rustlens
 
 from astropy.timeseries import TimeSeries
 from astropy import units, constants
+import unxt
 
 import jax
 from jax import numpy as jnp
 
 from .lensing import wm_callback
-from .models import SelfLensingSystem
+from .models import SelfLensingSystem, _quantity_value
 
 # from src.selflensing.gp.LensingGP import _run_nucs_safe
 
@@ -235,24 +236,19 @@ class EllipsoidalVariationsLightcurveGenerator(FlatLightcurveGenerator):
     @property
     def amplification(self):
         phases = self.lensing_system.time_to_phase(self.time_offsets * 2)
+        mass_ratio = _quantity_value(self.lensing_system.Macc, units.kg) / _quantity_value(
+            self.lensing_system.Mcomp, units.kg
+        )
+        radius_ratio = _quantity_value(self.lensing_system.Rcomp, units.m) / _quantity_value(
+            self.lensing_system.r_sep(phases), units.m
+        )
         return (
-            (
-                (
-                    self.beta
-                    * (self.lensing_system.Macc / self.lensing_system.Mcomp).decompose(
-                        []
-                    )
-                    * (
-                        self.lensing_system.Rcomp / self.lensing_system.r_sep(phases)
-                    ).decompose([])
-                    ** 3
-                    * self.lensing_system.sin_i**2
-                )
-                * (jnp.cos(phases.value))
-                * -1
-            )
-            .decompose([])
-            .value
+            self.beta
+            * mass_ratio
+            * radius_ratio**3
+            * _quantity_value(self.lensing_system.sin_i) ** 2
+            * jnp.cos(_quantity_value(phases, units.rad))
+            * -1
         )
 
     @property
@@ -577,11 +573,12 @@ class RVGenerator(GeneratorBase):
     @property
     def rv(self):
         phases = self.phases()
-        return (
-            self.lensing_system.v_comp(phases)
-            * jnp.sin(phases.value)
-            * self.lensing_system.sin_i
-        ).to(self.units)
+        rv = (
+            _quantity_value(self.lensing_system.v_comp(phases), self.units)
+            * jnp.sin(_quantity_value(phases, units.rad))
+            * _quantity_value(self.lensing_system.sin_i)
+        )
+        return unxt.Quantity(rv, self.units)
 
     @property
     def rv_deriv(self):

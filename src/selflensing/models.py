@@ -26,6 +26,12 @@ DEFAULT_LIMITS = {
 }
 
 
+def _quantity_value(quantity, unit=None):
+    if unit is not None and hasattr(quantity, "to"):
+        quantity = quantity.to(unit)
+    return quantity.value if hasattr(quantity, "value") else quantity
+
+
 class SelfLensingSystem(object):
     param_units = {
         "a": units.au,
@@ -148,9 +154,14 @@ class SelfLensingSystem(object):
     def i(self, i):
         self._i = i
         self.sin_i = numpy.sin(i)
-        # Calculate as per Wiktorowicz+2021
-        # Floating point errors can make this a small negative number
-        self._b = numpy.abs((self.a * numpy.cos(i) / self.rE()).decompose([]))
+        # Calculate as per Wiktorowicz+2021. Keep the arithmetic numeric here so
+        # unxt quantities can be used inside JAX-traced likelihood functions.
+        b = numpy.abs(
+            _quantity_value(self.a, units.m)
+            * _quantity_value(numpy.cos(i))
+            / _quantity_value(self.rE(), units.m)
+        )
+        self._b = Quantity(b, units.dimensionless_unscaled)
 
     @property
     def b_max(self):
@@ -161,7 +172,10 @@ class SelfLensingSystem(object):
         Astronomical Society 507, no. 1 (11 October 2021): 374–84.
         https://doi.org/10.1093/mnras/stab2135.
         """
-        return (1 + self.Rcomp / self.rE()).decompose([])
+        value = 1 + _quantity_value(self.Rcomp, units.m) / _quantity_value(
+            self.rE(), units.m
+        )
+        return Quantity(value, units.dimensionless_unscaled)
 
     @property
     def sl_possible(self):
@@ -173,7 +187,12 @@ class SelfLensingSystem(object):
         The impact parameter in units of Rcomp (source radii). b_source=1 when the lens is at
         the edge of the stellar disk.
         """
-        return (self.b * (self.rE() / self.Rcomp)).decompose([])
+        value = (
+            _quantity_value(self.b)
+            * _quantity_value(self.rE(), units.m)
+            / _quantity_value(self.Rcomp, units.m)
+        )
+        return Quantity(value, units.dimensionless_unscaled)
 
     @property
     def Mtot(self):
@@ -190,30 +209,29 @@ class SelfLensingSystem(object):
 
         When the lens is behind the star, assumes l is at its maximum.
         """
-        phase_limit = 0.5 * numpy.pi * units.rad
-        phase_upper_limit = 2 * numpy.pi * units.rad - phase_limit
-        if isinstance(phase, numpy.ndarray) or phase.shape != tuple():
-            phase = jnp.array(phase.value)
-            phase = jnp.where(
-                (phase > phase_limit.value) & (phase < phase_upper_limit.value),
-                jnp.full_like(phase, phase_limit.value),
-                phase,
-            )
-            phase = Quantity(phase, units.rad)
-        elif phase > phase_limit and phase < phase_upper_limit:
-            phase = 0.5 * numpy.pi * units.rad
-        return numpy.hypot(
-            numpy.abs(
-                self.r_sep(phase=phase).to(units.m).value
-                * numpy.sin(phase.value)
-                / self.Rcomp.to(units.m).value
-            ),
-            self.b_source.value,
+        phase_value = _quantity_value(phase, units.rad)
+        phase_limit = 0.5 * numpy.pi
+        phase_upper_limit = 2 * numpy.pi - phase_limit
+        phase_value = jnp.where(
+            (phase_value > phase_limit) & (phase_value < phase_upper_limit),
+            jnp.full_like(phase_value, phase_limit),
+            phase_value,
         )
+        value = numpy.hypot(
+            numpy.abs(
+                _quantity_value(self.r_sep(phase=Quantity(phase_value, units.rad)), units.m)
+                * numpy.sin(phase_value)
+                / _quantity_value(self.Rcomp, units.m)
+            ),
+            _quantity_value(self.b_source),
+        )
+        return Quantity(value, units.dimensionless_unscaled)
 
     @units.quantity_input
     def phase_to_b(self, phase: units.rad):
-        return (self.phase_to_l(phase) / (self.rE() / self.Rcomp)).decompose([]).value
+        return _quantity_value(self.phase_to_l(phase)) / (
+            _quantity_value(self.rE(), units.m) / _quantity_value(self.Rcomp, units.m)
+        )
 
     @property
     def porb(self) -> units.day:
@@ -227,14 +245,18 @@ class SelfLensingSystem(object):
         """
         The distance from the centre of mass of the object with mass 'm' at 'phase'
         """
-        r_max = self.a * m / self.Mtot
-        return (r_max * (1 - self.e**2)) / (
-            1
-            + self.e
-            * numpy.cos(
-                phase.to(units.rad).value - self.periapsis_phase.to(units.rad).value
-            )
+        r_max = (
+            _quantity_value(self.a, units.m)
+            * _quantity_value(m, units.kg)
+            / _quantity_value(self.Mtot, units.kg)
         )
+        e = _quantity_value(self.e)
+        phase_value = _quantity_value(phase, units.rad)
+        periapsis_phase = _quantity_value(self.periapsis_phase, units.rad)
+        value = r_max * (1 - e**2) / (
+            1 + e * numpy.cos(phase_value - periapsis_phase)
+        )
+        return Quantity(value, units.m)
 
     @units.quantity_input
     def rE(self, phase: units.rad = 0 * units.rad) -> Quantity:
@@ -264,7 +286,10 @@ class SelfLensingSystem(object):
         """
         The separation in space between acc and comp at phase
         """
-        return (self.r(self.Macc, phase) + self.r(self.Mcomp, phase)).to(units.m)
+        value = _quantity_value(self.r(self.Macc, phase), units.m) + _quantity_value(
+            self.r(self.Mcomp, phase), units.m
+        )
+        return Quantity(value, units.m)
 
     @property
     def tau_eff(self):
@@ -316,8 +341,9 @@ class SelfLensingSystem(object):
         """
         Convert time offsets to angular orbital phases.
         """
-        time = time.value % self.porb.value
-        return Quantity((((time / self.porb.value) * 2 * numpy.pi)), units.rad)
+        time = _quantity_value(time, units.day)
+        porb = _quantity_value(self.porb, units.day)
+        return Quantity((((time % porb) / porb) * 2 * numpy.pi), units.rad)
 
     @units.quantity_input
     def v(self, m: units.kg, phase: units.rad) -> units.m / units.s:
@@ -345,14 +371,9 @@ class SelfLensingSystem(object):
     @units.quantity_input
     def v_comp(self, phase: units.rad):
         # return self.v(self.Mcomp, phase)
-        return Quantity(
-            (
-                (
-                    constants.G.value
-                    * self.Macc.to(units.kg).value
-                    / self.r_sep(phase).to(units.m).value
-                )
-                ** 0.5
-            ),
-            units.m / units.s,
-        )
+        velocity = (
+            constants.G.value
+            * _quantity_value(self.Macc, units.kg)
+            / _quantity_value(self.r_sep(phase), units.m)
+        ) ** 0.5
+        return Quantity(velocity, units.m / units.s)

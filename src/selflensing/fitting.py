@@ -76,8 +76,10 @@ def combined_chi2(
         Rcomp = unxt.Quantity(Rcomp, SelfLensingSystem.param_units["Rcomp"])
     if d is not None:
         d = unxt.Quantity(d, SelfLensingSystem.param_units["d"])
-    observed_rv = unxt.Quantity(observed_rv, units.m / units.s)
-    observed_rv_err = unxt.Quantity(observed_rv_err, units.m / units.s)
+    if observed_rv is not None:
+        observed_rv = unxt.Quantity(observed_rv, units.m / units.s)
+    if observed_rv_err is not None:
+        observed_rv_err = unxt.Quantity(observed_rv_err, units.m / units.s)
     lp_bounds = log_prior_bounds(
         params,
         (
@@ -185,10 +187,13 @@ def combined_chi2(
                         peak_time=peak_time,
                         lensing_method=lensing_method,
                     )
+                    model_lc = lc_gen.flux_array
+                    if hasattr(model_lc, "value"):
+                        model_lc = model_lc.value
                     return chi2(
                         observed_lc,
-                        observed_lc_err.value,
-                        lc_gen.flux_array,
+                        observed_lc_err,
+                        model_lc,
                     )
 
                 def gp_chi2():
@@ -208,11 +213,7 @@ def combined_chi2(
                         _lc_chi2,
                     )
 
-                return jax.lax.cond(
-                    gp_model is not None,
-                    gp_chi2,
-                    _lc_chi2,
-                )
+                return gp_chi2() if gp_model is not None else _lc_chi2()
 
                 # if gp is not None:
                 #     gp.sls = model_sls
@@ -230,16 +231,8 @@ def combined_chi2(
                 #         lc_gen.flux_array.value,
                 #     )
 
-            rv_chi2 = jax.lax.cond(
-                observed_rv is not None,
-                calc_rv_chi2,
-                zero,  # model_sls
-            )
-            lc_chi2 = jax.lax.cond(
-                observed_lc is not None,
-                calc_lc_chi2,
-                zero,  # model_sls
-            )
+            rv_chi2 = calc_rv_chi2() if observed_rv is not None else zero()
+            lc_chi2 = calc_lc_chi2() if observed_lc is not None else zero()
 
             # jax.debug.print(
             #     "rv={rv}, lc={lc}, period={period}, tau_eff={tau_eff}",
@@ -398,8 +391,14 @@ def self_lensing_system_from_fit(
     Mcomp = Mcomp.to(SelfLensingSystem.param_units["Mcomp"])
     if Rcomp is not None:
         Rcomp = Rcomp.to(SelfLensingSystem.param_units["Rcomp"])
-    observed_rv = observed_rv.to(units.m / units.s)
-    observed_rv_err = observed_rv_err.to(units.m / units.s)
+    if observed_rv is not None:
+        observed_rv = observed_rv.to(units.m / units.s)
+    if observed_rv_err is not None:
+        observed_rv_err = observed_rv_err.to(units.m / units.s)
+    if observed_lc is not None and hasattr(observed_lc, "to"):
+        observed_lc = observed_lc.to(units.dimensionless_unscaled)
+    if observed_lc_err is not None and hasattr(observed_lc_err, "to"):
+        observed_lc_err = observed_lc_err.to(units.dimensionless_unscaled)
 
     from .lombscargle import get_periods
 
@@ -462,15 +461,15 @@ def self_lensing_system_from_fit(
     args = (
         Mcomp.value,
         Rcomp.value if Rcomp is not None else None,
-        tau_eff.value,
+        tau_eff.value if tau_eff is not None else None,
         d.value if d is not None else None,
         peak_time,
         rv_times,
-        observed_rv.value,
-        observed_rv_err.value,
+        observed_rv.value if observed_rv is not None else None,
+        observed_rv_err.value if observed_rv_err is not None else None,
         lc_times,
-        observed_lc,
-        observed_lc_err,
+        observed_lc.value if hasattr(observed_lc, "value") else observed_lc,
+        observed_lc_err.value if hasattr(observed_lc_err, "value") else observed_lc_err,
         gp_model,
         detected_periods,
         lensing_method,
