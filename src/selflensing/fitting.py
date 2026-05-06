@@ -87,6 +87,7 @@ def combined_chi2(
     gp_model,
     detected_periods,
     lensing_method,
+    center_lc_model=False,
     # weight_lc_peak=False,
     period_min=None,
     period_max=None,
@@ -228,6 +229,8 @@ def combined_chi2(
                     model_lc = lc_gen.flux_array
                     if hasattr(model_lc, "value"):
                         model_lc = model_lc.value
+                    if center_lc_model:
+                        model_lc = model_lc - 1.0
                     return chi2(
                         observed_lc,
                         observed_lc_err,
@@ -324,6 +327,7 @@ def make_combined_chi2_vec(
     gp,
     detected_periods,
     lensing_method,
+    center_lc_model=False,
     weight_lc_peak=False,
     period_min=None,
     period_max=None,
@@ -361,6 +365,7 @@ def make_combined_chi2_vec(
                     gp,
                     detected_periods,
                     lensing_method,
+                    center_lc_model,
                     # weight_lc_peak,
                     period_min,
                     period_max,
@@ -404,6 +409,7 @@ def self_lensing_system_from_fit(
     nsteps=5000,
     burn=500,
     lensing_method=SelfLensingLightcurveGenerator.DEFAULT_LENSING_METHOD,
+    center_lc_model=False,
     pool=None,
     progress=True,
     prefer_gpu=True,
@@ -535,6 +541,7 @@ def self_lensing_system_from_fit(
         gp_model,
         detected_periods,
         lensing_method,
+        center_lc_model,
         weight_lc_peak,
         period_min,
         period_max,
