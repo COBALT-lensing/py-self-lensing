@@ -447,7 +447,6 @@ def self_lensing_system_from_fit(
             ),
         ]
     )
-    print("detected periods:", detected_periods)
 
     # close_pool = False
     # if pool is None:
