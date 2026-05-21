@@ -414,8 +414,14 @@ def self_lensing_system_from_fit(
     progress=True,
     prefer_gpu=True,
     device=None,
+    stop_on_convergence=False,
 ):
-    logging.debug(f"fit: nwalkers={nwalkers}, nsteps={nsteps}")
+    logging.debug(
+        "fit: nwalkers=%s, nsteps=%s, stop_on_convergence=%s",
+        nwalkers,
+        nsteps,
+        stop_on_convergence,
+    )
     if observed_rv is None and observed_lc is None:
         raise RuntimeError("You must provide at least one of observed_rv, observed_ts")
 
@@ -563,11 +569,34 @@ def self_lensing_system_from_fit(
         #     (emcee.moves.DESnookerMove(), 0.2),
         # ],
     )
-    sampler.run_mcmc(
-        p0,
-        nsteps,
-        progress=progress,
-    )
+    if stop_on_convergence:
+        autocorr_check_interval = 100
+        old_tau = numpy.inf
+
+        for _ in sampler.sample(p0, iterations=nsteps, progress=progress):
+            if sampler.iteration % autocorr_check_interval:
+                continue
+
+            try:
+                tau = sampler.get_autocorr_time(tol=0)
+            except emcee.autocorr.AutocorrError:
+                continue
+
+            converged = numpy.all(numpy.isfinite(tau))
+            converged &= numpy.all(tau * 100 < sampler.iteration)
+            converged &= numpy.all(numpy.abs(old_tau - tau) / tau < 0.01)
+
+            if converged:
+                logging.info("fit: converged after %s steps", sampler.iteration)
+                break
+
+            old_tau = tau
+    else:
+        sampler.run_mcmc(
+            p0,
+            nsteps,
+            progress=progress,
+        )
     # finally:
     #     if close_pool:
     #         pool.close()
