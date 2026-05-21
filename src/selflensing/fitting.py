@@ -415,12 +415,31 @@ def self_lensing_system_from_fit(
     prefer_gpu=True,
     device=None,
     stop_on_convergence=False,
+    initial_walker_state=None,
 ):
+    ndim = 5
+    initial_walker_coords = None
+    if initial_walker_state is not None:
+        initial_walker_coords = getattr(
+            initial_walker_state,
+            "coords",
+            initial_walker_state,
+        )
+        initial_walker_coords = numpy.asarray(initial_walker_coords)
+        if initial_walker_coords.ndim != 2 or initial_walker_coords.shape[1] != ndim:
+            raise ValueError(
+                "initial_walker_state must have coordinates with shape "
+                f"(nwalkers, {ndim})"
+            )
+        nwalkers = initial_walker_coords.shape[0]
+
     logging.debug(
-        "fit: nwalkers=%s, nsteps=%s, stop_on_convergence=%s",
+        "fit: nwalkers=%s, nsteps=%s, stop_on_convergence=%s, "
+        "initial_walker_state=%s",
         nwalkers,
         nsteps,
         stop_on_convergence,
+        initial_walker_state is not None,
     )
     if observed_rv is None and observed_lc is None:
         raise RuntimeError("You must provide at least one of observed_rv, observed_ts")
@@ -558,7 +577,7 @@ def self_lensing_system_from_fit(
     # try:
     sampler = emcee.EnsembleSampler(
         nwalkers,
-        len(p0[0]),
+        ndim,
         make_combined_chi2_vec(*args),
         vectorize=True,
         # combined_chi2,
@@ -569,11 +588,20 @@ def self_lensing_system_from_fit(
         #     (emcee.moves.DESnookerMove(), 0.2),
         # ],
     )
+    starting_walker_state = (
+        initial_walker_state if initial_walker_state is not None else p0
+    )
+    final_walker_state = None
+
     if stop_on_convergence:
         autocorr_check_interval = 100
         old_tau = numpy.inf
 
-        for _ in sampler.sample(p0, iterations=nsteps, progress=progress):
+        for final_walker_state in sampler.sample(
+            starting_walker_state,
+            iterations=nsteps,
+            progress=progress,
+        ):
             if sampler.iteration % autocorr_check_interval:
                 continue
 
@@ -592,8 +620,8 @@ def self_lensing_system_from_fit(
 
             old_tau = tau
     else:
-        sampler.run_mcmc(
-            p0,
+        final_walker_state = sampler.run_mcmc(
+            starting_walker_state,
             nsteps,
             progress=progress,
         )
@@ -619,4 +647,5 @@ def self_lensing_system_from_fit(
             d=d,
         ),
         sampler,
+        final_walker_state,
     )
