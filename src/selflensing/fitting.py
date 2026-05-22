@@ -498,6 +498,7 @@ def self_lensing_system_from_fit(
     center_lc_model=False,
     pool=None,
     progress=True,
+    progress_desc=None,
     prefer_gpu=True,
     device=None,
     stop_on_convergence=False,
@@ -683,6 +684,9 @@ def self_lensing_system_from_fit(
         initial_walker_state if initial_walker_state is not None else p0
     )
     final_walker_state = None
+    progress_kwargs = (
+        {"desc": progress_desc} if progress and progress_desc is not None else None
+    )
 
     if stop_on_convergence:
         autocorr_check_interval = 100
@@ -692,6 +696,7 @@ def self_lensing_system_from_fit(
             starting_walker_state,
             iterations=nsteps,
             progress=progress,
+            progress_kwargs=progress_kwargs,
         ):
             if sampler.iteration % autocorr_check_interval:
                 continue
@@ -715,6 +720,7 @@ def self_lensing_system_from_fit(
             starting_walker_state,
             nsteps,
             progress=progress,
+            progress_kwargs=progress_kwargs,
         )
     # finally:
     #     if close_pool:
