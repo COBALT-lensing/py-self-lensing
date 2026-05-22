@@ -27,9 +27,11 @@ import numpy
 import unxt
 import warnings
 
+from dataclasses import dataclass
 from astropy import units
 from quax import quaxify
 from quaxed import numpy as jnp
+from tqdm import tqdm
 
 from .models import SelfLensingSystem, DEFAULT_LIMITS
 from .generators import (
@@ -472,6 +474,408 @@ def make_combined_chi2_vec(
         return numpy.asarray(result)
 
     return logprob
+
+
+def make_combined_chi2_vec_jax(
+    Mcomp,
+    Rcomp,
+    tau_eff,
+    d,
+    peak_time,
+    rv_times,
+    observed_rv,
+    observed_rv_err,
+    lc_times,
+    observed_lc,
+    observed_lc_err,
+    gp,
+    detected_periods,
+    lensing_method,
+    center_lc_model=False,
+    weight_lc_peak=False,
+    period_min=None,
+    period_max=None,
+    model_sls=None,
+    device=None,
+):
+    """Build a JAX-native vectorized log-probability function.
+
+    Unlike make_combined_chi2_vec(), this keeps the log-probabilities on the
+    selected JAX device so device-native samplers do not synchronize with NumPy
+    on every MCMC step.
+    """
+    peak_time = _extract_value(peak_time)
+    rv_times = _extract_value(rv_times)
+    lc_times = _extract_value(lc_times)
+    Mcomp = _extract_value(Mcomp)
+    Rcomp = _extract_value(Rcomp)
+    tau_eff = _extract_value(tau_eff)
+    d = _extract_value(d)
+    observed_rv = _extract_value(observed_rv)
+    observed_rv_err = _extract_value(observed_rv_err)
+    observed_lc = _extract_value(observed_lc)
+    observed_lc_err = _extract_value(observed_lc_err)
+    detected_periods = _extract_value(detected_periods)
+
+    Mcomp = _device_array(Mcomp, device)
+    Rcomp = _device_array(Rcomp, device)
+    tau_eff = _device_array(tau_eff, device)
+    d = _device_array(d, device)
+    observed_rv = _device_array(observed_rv, device)
+    observed_rv_err = _device_array(observed_rv_err, device)
+    observed_lc = _device_array(observed_lc, device)
+    observed_lc_err = _device_array(observed_lc_err, device)
+    detected_periods = _device_array(detected_periods, device)
+
+    @quaxify
+    def _combined_chi2_vec(params):
+        params = jax.device_put(jax_numpy.asarray(params), device)
+        return jnp.asarray(
+            jax.vmap(
+                lambda p: combined_chi2(
+                    p,
+                    Mcomp,
+                    Rcomp,
+                    tau_eff,
+                    d,
+                    peak_time,
+                    rv_times,
+                    observed_rv,
+                    observed_rv_err,
+                    lc_times,
+                    observed_lc,
+                    observed_lc_err,
+                    gp,
+                    detected_periods,
+                    lensing_method,
+                    center_lc_model,
+                    period_min,
+                    period_max,
+                    model_sls,
+                )
+            )(params)
+        )
+
+    combined_chi2_vec = jax.jit(_combined_chi2_vec)
+
+    def logprob(params):
+        params = jax.device_put(params, device)
+        return combined_chi2_vec(params)
+
+    return logprob
+
+
+@dataclass
+class BlackJAXFitState:
+    coords: numpy.ndarray
+
+
+class BlackJAXSamplerResult:
+    """Small emcee-like adapter for downstream diagnostics."""
+
+    def __init__(self, chain, log_prob, acceptance=None):
+        self.chain = numpy.asarray(chain)
+        self.log_prob = numpy.asarray(log_prob)
+        self.acceptance = None if acceptance is None else numpy.asarray(acceptance)
+
+    @property
+    def iteration(self):
+        return len(self.chain)
+
+    @property
+    def acceptance_fraction(self):
+        if self.acceptance is None or self.acceptance.size == 0:
+            return numpy.full(self.chain.shape[1], numpy.nan)
+        return numpy.mean(self.acceptance, axis=0)
+
+    def get_chain(self, flat=False, discard=0, thin=1):
+        chain = self.chain[discard::thin]
+        if flat:
+            return chain.reshape((-1, chain.shape[-1]))
+        return chain
+
+    def get_log_prob(self, flat=False, discard=0, thin=1):
+        log_prob = self.log_prob[discard::thin]
+        if flat:
+            return log_prob.reshape((-1,))
+        return log_prob
+
+
+def _initial_walker_positions(nwalkers, initial_walker_state=None):
+    ndim = 5
+    if initial_walker_state is not None:
+        initial_walker_coords = getattr(
+            initial_walker_state,
+            "coords",
+            initial_walker_state,
+        )
+        initial_walker_coords = numpy.asarray(initial_walker_coords)
+        if initial_walker_coords.ndim != 2 or initial_walker_coords.shape[1] != ndim:
+            raise ValueError(
+                "initial_walker_state must have coordinates with shape "
+                f"(nwalkers, {ndim})"
+            )
+        return initial_walker_coords
+
+    p0 = [
+        numpy.random.uniform(bounds[0], bounds[1], nwalkers)
+        for bounds in (
+            DEFAULT_LIMITS["i"],
+            DEFAULT_LIMITS["Macc"],
+            DEFAULT_LIMITS["e"],
+            DEFAULT_LIMITS["periapsis_phase"],
+        )
+    ]
+    p0.insert(
+        0,
+        jnp.logspace(
+            jnp.log10(DEFAULT_LIMITS["a"][0]),
+            jnp.log10(DEFAULT_LIMITS["a"][1]),
+            nwalkers,
+        ),
+    )
+    return numpy.asarray(list(zip(*p0)), dtype=float)
+
+
+def _default_blackjax_proposal_scale():
+    scale_fraction = 0.02
+    return jnp.asarray(
+        [
+            scale_fraction * (DEFAULT_LIMITS["a"][1] - DEFAULT_LIMITS["a"][0]),
+            scale_fraction * (DEFAULT_LIMITS["i"][1] - DEFAULT_LIMITS["i"][0]),
+            scale_fraction
+            * (DEFAULT_LIMITS["Macc"][1] - DEFAULT_LIMITS["Macc"][0]),
+            scale_fraction * (DEFAULT_LIMITS["e"][1] - DEFAULT_LIMITS["e"][0]),
+            scale_fraction
+            * (
+                DEFAULT_LIMITS["periapsis_phase"][1]
+                - DEFAULT_LIMITS["periapsis_phase"][0]
+            ),
+        ],
+        dtype=float,
+    )
+
+
+def _best_fit_system_from_samples(flat_samples, flat_log_prob, Rcomp, Mcomp, Teff, d):
+    res = flat_samples[jnp.argmax(flat_log_prob)]
+    out_a, out_i, out_Macc, out_e, out_periapsis_phase = res
+    return SelfLensingSystem(
+        a=out_a * SelfLensingSystem.param_units["a"],
+        i=out_i * SelfLensingSystem.param_units["i"],
+        Macc=out_Macc * SelfLensingSystem.param_units["Macc"],
+        Rcomp=Rcomp,
+        Mcomp=Mcomp,
+        Teff=Teff,
+        e=out_e * SelfLensingSystem.param_units["e"],
+        periapsis_phase=out_periapsis_phase
+        * SelfLensingSystem.param_units["periapsis_phase"],
+        d=d,
+    )
+
+
+@units.quantity_input
+def self_lensing_system_from_fit_blackjax(
+    Mcomp: units.kg,
+    peak_time,
+    rv_times=None,
+    observed_rv=None,
+    observed_rv_err=None,
+    lc_times=None,
+    observed_lc=None,
+    observed_lc_err=None,
+    gp_model=None,
+    Rcomp: units.m = None,
+    Teff: units.K = None,
+    tau_eff: units.day = None,
+    d: units.pc = SelfLensingSystem.DEFAULT_D,
+    false_alarm_probability=0.1,
+    detect_periods=False,
+    periods=[],
+    period_min: units.day = None,
+    period_max: units.day = None,
+    weight_lc_peak=False,
+    nwalkers=100,
+    nsteps=5000,
+    burn=500,
+    lensing_method=None,
+    center_lc_model=False,
+    progress=True,
+    progress_desc=None,
+    prefer_gpu=True,
+    device=None,
+    initial_walker_state=None,
+    proposal_scale=None,
+    random_seed=0,
+    progress_chunk_size=100,
+):
+    """Fit using a BlackJAX random-walk Metropolis-Hastings backend.
+
+    This is an additive, JAX-native alternative to self_lensing_system_from_fit().
+    It keeps walker positions and log-probabilities on the selected JAX device
+    during sampling and returns a small emcee-like result adapter.
+
+    Limitations:
+    - Rcomp must be provided. The default SelfLensingSystem path infers Rcomp
+      from Mcomp using Astropy quantities, which is not safe inside the traced
+      JAX likelihood.
+    - gp_model is not supported yet because the GP likelihood setup still
+      expects Python/object-level state that is not carried through this
+      device-native sampler path.
+    - detect_periods=True is not supported yet. Period detection is a CPU
+      preprocessing step in the emcee fitter and has not been split out for
+      this backend.
+    - There is no stop_on_convergence equivalent yet. BlackJAX runs exactly
+      nsteps and leaves convergence checks to downstream diagnostics.
+    - This uses independent random-walk Metropolis-Hastings chains. It is the
+      smallest safe move away from emcee, not a tuned HMC/NUTS implementation.
+    """
+    import blackjax
+
+    if observed_rv is None and observed_lc is None:
+        raise RuntimeError("You must provide at least one of observed_rv, observed_ts")
+    if Rcomp is None:
+        # SelfLensingSystem can infer Rcomp from Mcomp outside JAX tracing, but
+        # that inference multiplies traced values by Astropy units and fails
+        # inside the compiled likelihood. Keep this explicit until the model
+        # constructor has a fully unitless/JAX-native path.
+        raise NotImplementedError(
+            "BlackJAX fitting requires Rcomp to be provided; inferring Rcomp from "
+            "Mcomp inside the traced likelihood is not JAX-safe"
+        )
+    if gp_model is not None:
+        # The GP path builds generator/GP objects during likelihood evaluation.
+        # That object state has not been made into a JAX pytree, so keep it out
+        # of the device-native sampler for now.
+        raise NotImplementedError("BlackJAX fitting does not currently support gp_model")
+    if detect_periods:
+        # The emcee fitter performs Lomb-Scargle detection before sampler setup.
+        # This backend currently accepts explicit `periods` only, so callers can
+        # still do CPU period detection separately if they need those priors.
+        raise NotImplementedError(
+            "BlackJAX fitting does not currently support detect_periods=True"
+        )
+
+    fit_device = _select_fit_device(device=device, prefer_gpu=prefer_gpu)
+    if lensing_method is None:
+        lensing_method = (
+            SelfLensingLightcurveGenerator.default_lensing_method_for_device(fit_device)
+        )
+    logging.info(
+        "blackjax fit: using JAX %s device %s with lensing_method=%s",
+        fit_device.platform,
+        fit_device,
+        lensing_method,
+    )
+
+    nwalkers = int(nwalkers)
+    nsteps = int(nsteps)
+    burn = int(burn)
+    p0 = _initial_walker_positions(nwalkers, initial_walker_state)
+    nwalkers = p0.shape[0]
+
+    Mcomp = Mcomp.to(SelfLensingSystem.param_units["Mcomp"])
+    if Rcomp is not None:
+        Rcomp = Rcomp.to(SelfLensingSystem.param_units["Rcomp"])
+    if observed_rv is not None:
+        observed_rv = observed_rv.to(units.m / units.s)
+    if observed_rv_err is not None:
+        observed_rv_err = observed_rv_err.to(units.m / units.s)
+    if observed_lc is not None and hasattr(observed_lc, "to"):
+        observed_lc = observed_lc.to(units.dimensionless_unscaled)
+    if observed_lc_err is not None and hasattr(observed_lc_err, "to"):
+        observed_lc_err = observed_lc_err.to(units.dimensionless_unscaled)
+
+    default_sls = SelfLensingSystem(
+        0 * SelfLensingSystem.param_units["Macc"],
+        0 * SelfLensingSystem.param_units["Mcomp"],
+        0 * SelfLensingSystem.param_units["Rcomp"],
+        0 * SelfLensingSystem.param_units["a"],
+    )
+    detected_periods = jnp.array(periods) if len(periods) > 0 else jnp.array([])
+    logprob_vec = make_combined_chi2_vec_jax(
+        Mcomp.value,
+        Rcomp.value if Rcomp is not None else None,
+        tau_eff.value if tau_eff is not None else None,
+        d.value if d is not None else None,
+        peak_time,
+        rv_times,
+        observed_rv.value if observed_rv is not None else None,
+        observed_rv_err.value if observed_rv_err is not None else None,
+        lc_times,
+        observed_lc.value if hasattr(observed_lc, "value") else observed_lc,
+        observed_lc_err.value if hasattr(observed_lc_err, "value") else observed_lc_err,
+        gp_model,
+        detected_periods,
+        lensing_method,
+        center_lc_model,
+        weight_lc_peak,
+        period_min,
+        period_max,
+        default_sls,
+        fit_device,
+    )
+
+    def logprob(position):
+        return logprob_vec(position[jnp.newaxis, :])[0]
+
+    if proposal_scale is None:
+        proposal_scale = _default_blackjax_proposal_scale()
+    proposal_scale = jax.device_put(jax_numpy.asarray(proposal_scale), fit_device)
+    random_walk = blackjax.additive_step_random_walk(
+        logprob,
+        blackjax.mcmc.random_walk.normal(proposal_scale),
+    )
+    state = jax.vmap(random_walk.init)(jax.device_put(jax_numpy.asarray(p0), fit_device))
+
+    def one_step(state, rng_key):
+        walker_keys = jax.random.split(rng_key, nwalkers)
+        new_state, info = jax.vmap(random_walk.step)(walker_keys, state)
+        return new_state, (new_state.position, new_state.logdensity, info.is_accepted)
+
+    @jax.jit
+    def run_steps(state, rng_keys):
+        return jax.lax.scan(one_step, state, rng_keys)
+
+    rng_key = jax.random.PRNGKey(random_seed)
+    chain_chunks = []
+    log_prob_chunks = []
+    acceptance_chunks = []
+    remaining_steps = nsteps
+    if progress:
+        progress_iter = tqdm(
+            total=nsteps,
+            desc=progress_desc,
+            disable=not progress,
+        )
+    else:
+        progress_iter = None
+
+    try:
+        chunk_size = nsteps if not progress else max(1, int(progress_chunk_size))
+        while remaining_steps > 0:
+            current_chunk_size = min(chunk_size, remaining_steps)
+            rng_key, sample_key = jax.random.split(rng_key)
+            step_keys = jax.random.split(sample_key, current_chunk_size)
+            state, (positions, log_prob, accepted) = run_steps(state, step_keys)
+            chain_chunks.append(positions)
+            log_prob_chunks.append(log_prob)
+            acceptance_chunks.append(accepted)
+            remaining_steps -= current_chunk_size
+            if progress_iter is not None:
+                progress_iter.update(current_chunk_size)
+    finally:
+        if progress_iter is not None:
+            progress_iter.close()
+
+    chain = jax.device_get(jnp.concatenate(chain_chunks, axis=0))
+    log_prob = jax.device_get(jnp.concatenate(log_prob_chunks, axis=0))
+    acceptance = jax.device_get(jnp.concatenate(acceptance_chunks, axis=0))
+    sampler = BlackJAXSamplerResult(chain, log_prob, acceptance=acceptance)
+    flat_samples = sampler.get_chain(flat=True, discard=burn)
+    flat_log_prob = sampler.get_log_prob(flat=True, discard=burn)
+    sls = _best_fit_system_from_samples(flat_samples, flat_log_prob, Rcomp, Mcomp, Teff, d)
+    final_walker_state = BlackJAXFitState(coords=sampler.chain[-1])
+    return sls, sampler, final_walker_state
 
 
 @units.quantity_input
