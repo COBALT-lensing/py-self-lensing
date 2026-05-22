@@ -4,7 +4,7 @@
 GPU Support:
     This module supports GPU acceleration via JAX for faster MCMC fitting.
     JAX 0.10+ compatibility is ensured through proper device pinning.
-    
+
     Known Limitations:
     - Astropy Quantity and Time objects (used for unit handling) cannot be
       efficiently traced by JAX's JIT compiler. While the @quaxify decorator
@@ -12,7 +12,7 @@ GPU Support:
       Python level on CPU, not in compiled GPU code.
     - For best performance, consider refactoring to use unitless JAX arrays
       throughout the likelihood computation (future enhancement).
-    
+
     Device Selection:
     - Set device="gpu:0" in self_lensing_system_from_fit() to use GPU
     - Set device="cpu" to force CPU execution
@@ -71,28 +71,30 @@ def _select_fit_device(device=None, prefer_gpu=True):
         try:
             return devices[int(device_id)]
         except (ValueError, IndexError) as exc:
-            raise RuntimeError(f"No JAX {platform!r} device with index {device_id}") from exc
+            raise RuntimeError(
+                f"No JAX {platform!r} device with index {device_id}"
+            ) from exc
 
     return devices[0]
 
 
 def _extract_value(obj):
     """Extract unitless value from astropy Quantity or Time object.
-    
+
     This function is called at Python level (before JIT tracing) to convert
     astropy objects to plain NumPy arrays, enabling efficient GPU computation.
     """
     if obj is None:
         return None
-    
+
     # Handle astropy Time objects
-    if hasattr(obj, 'jd') and hasattr(obj, 'iso'):
+    if hasattr(obj, "jd") and hasattr(obj, "iso"):
         return obj.jd
-    
+
     # Handle astropy Quantity objects
-    if hasattr(obj, 'value'):
+    if hasattr(obj, "value"):
         return obj.value
-    
+
     # Already a plain array or scalar
     return obj
 
@@ -135,7 +137,7 @@ def combined_chi2(
     model_sls=None,
 ):
     """Compute log-likelihood for self-lensing binary parameters.
-    
+
     The @quaxify decorator allows astropy Quantity and Time objects to work
     with JAX tracers. However, astropy operations execute at Python level
     (on CPU), not in compiled JAX code. Inputs should be unitless arrays when
@@ -397,7 +399,7 @@ def make_combined_chi2_vec(
     observed_lc = _extract_value(observed_lc)
     observed_lc_err = _extract_value(observed_lc_err)
     detected_periods = _extract_value(detected_periods)
-    
+
     Mcomp = _device_array(Mcomp, device)
     Rcomp = _device_array(Rcomp, device)
     tau_eff = _device_array(tau_eff, device)
@@ -441,7 +443,7 @@ def make_combined_chi2_vec(
     # === JAX 0.10+ Compatibility and GPU Support ===
     # JAX 0.10+ removed the device= parameter from jax.jit(). Instead, device
     # placement is controlled via jax.device_put() and context managers.
-    # 
+    #
     # For GPU execution, we wrap the JIT with explicit device placement:
     # 1. All input data is pre-placed on GPU via _device_array()
     # 2. The wrapper ensures inputs to the JIT function come from the target device
@@ -449,14 +451,16 @@ def make_combined_chi2_vec(
     #
     # This approach ensures compatibility with JAX 0.10+ while maintaining
     # GPU acceleration when a GPU device is specified.
-    if device is not None and hasattr(device, 'platform') and device.platform == 'gpu':
+    if device is not None and hasattr(device, "platform") and device.platform == "gpu":
         # Use jax.jit with default device context
         combined_chi2_vec_jitted = jax.jit(_combined_chi2_vec)
+
         # Wrap to ensure GPU placement of entire computation
         def combined_chi2_vec(x):
             # Put inputs on GPU device, compute, result stays on GPU
             x_gpu = jax.device_put(x, device)
             return combined_chi2_vec_jitted(x_gpu)
+
     else:
         combined_chi2_vec = jax.jit(_combined_chi2_vec)
 
@@ -496,7 +500,6 @@ def self_lensing_system_from_fit(
     burn=500,
     lensing_method=None,
     center_lc_model=False,
-    pool=None,
     progress=True,
     progress_desc=None,
     prefer_gpu=True,
@@ -533,8 +536,8 @@ def self_lensing_system_from_fit(
 
     fit_device = _select_fit_device(device=device, prefer_gpu=prefer_gpu)
     if lensing_method is None:
-        lensing_method = SelfLensingLightcurveGenerator.default_lensing_method_for_device(
-            fit_device
+        lensing_method = (
+            SelfLensingLightcurveGenerator.default_lensing_method_for_device(fit_device)
         )
     logging.info(
         "fit: using JAX %s device %s with lensing_method=%s",
@@ -634,15 +637,6 @@ def self_lensing_system_from_fit(
         ]
     )
 
-    # close_pool = False
-    # if pool is None:
-    #     from multiprocessing import Pool
-
-    #     pool = Pool()
-    #     close_pool = True
-    # if pool is False:
-    #     pool = None
-
     args = (
         Mcomp.value,
         Rcomp.value if Rcomp is not None else None,
@@ -666,19 +660,11 @@ def self_lensing_system_from_fit(
         fit_device,
     )
 
-    # try:
     sampler = emcee.EnsembleSampler(
         nwalkers,
         ndim,
         make_combined_chi2_vec(*args),
         vectorize=True,
-        # combined_chi2,
-        # args=args,
-        # pool=pool,
-        # moves=[
-        #     (emcee.moves.DEMove(), 0.8),
-        #     (emcee.moves.DESnookerMove(), 0.2),
-        # ],
     )
     starting_walker_state = (
         initial_walker_state if initial_walker_state is not None else p0
@@ -722,9 +708,7 @@ def self_lensing_system_from_fit(
             progress=progress,
             progress_kwargs=progress_kwargs,
         )
-    # finally:
-    #     if close_pool:
-    #         pool.close()
+
     flat_samples = sampler.get_chain(flat=True, discard=burn)
     res = flat_samples[jnp.argmax(sampler.get_log_prob(flat=True, discard=burn))]
 
