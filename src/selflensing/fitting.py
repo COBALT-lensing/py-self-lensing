@@ -707,6 +707,7 @@ def self_lensing_system_from_fit_blackjax(
     proposal_scale=None,
     random_seed=0,
     progress_chunk_size=100,
+    return_sampler=True,
 ):
     """Fit using a BlackJAX random-walk Metropolis-Hastings backend.
 
@@ -728,6 +729,9 @@ def self_lensing_system_from_fit_blackjax(
       nsteps and leaves convergence checks to downstream diagnostics.
     - This uses independent random-walk Metropolis-Hastings chains. It is the
       smallest safe move away from emcee, not a tuned HMC/NUTS implementation.
+    - Set return_sampler=False for production fits that do not need chain
+      diagnostics. In that mode the best sample is tracked on device and the
+      full chain is not copied back to host memory.
     """
     import blackjax
 
@@ -840,7 +844,10 @@ def self_lensing_system_from_fit_blackjax(
     chain_chunks = []
     log_prob_chunks = []
     acceptance_chunks = []
+    best_position = None
+    best_log_prob = -jnp.inf
     remaining_steps = nsteps
+    completed_steps = 0
     if progress:
         progress_iter = tqdm(
             total=nsteps,
@@ -857,24 +864,57 @@ def self_lensing_system_from_fit_blackjax(
             rng_key, sample_key = jax.random.split(rng_key)
             step_keys = jax.random.split(sample_key, current_chunk_size)
             state, (positions, log_prob, accepted) = run_steps(state, step_keys)
-            chain_chunks.append(positions)
-            log_prob_chunks.append(log_prob)
-            acceptance_chunks.append(accepted)
+            if return_sampler:
+                chain_chunks.append(positions)
+                log_prob_chunks.append(log_prob)
+                acceptance_chunks.append(accepted)
+            elif completed_steps + current_chunk_size > burn:
+                post_burn_start = max(0, burn - completed_steps)
+                chunk_positions = positions[post_burn_start:]
+                chunk_log_prob = log_prob[post_burn_start:]
+                flat_positions = chunk_positions.reshape((-1, chunk_positions.shape[-1]))
+                flat_log_prob = chunk_log_prob.reshape((-1,))
+                chunk_best_index = jnp.argmax(flat_log_prob)
+                chunk_best_log_prob = flat_log_prob[chunk_best_index]
+                chunk_best_position = flat_positions[chunk_best_index]
+                use_chunk_best = chunk_best_log_prob > best_log_prob
+                best_log_prob = jnp.where(use_chunk_best, chunk_best_log_prob, best_log_prob)
+                best_position = (
+                    chunk_best_position
+                    if best_position is None
+                    else jnp.where(use_chunk_best, chunk_best_position, best_position)
+                )
             remaining_steps -= current_chunk_size
+            completed_steps += current_chunk_size
             if progress_iter is not None:
                 progress_iter.update(current_chunk_size)
     finally:
         if progress_iter is not None:
             progress_iter.close()
 
-    chain = jax.device_get(jnp.concatenate(chain_chunks, axis=0))
-    log_prob = jax.device_get(jnp.concatenate(log_prob_chunks, axis=0))
-    acceptance = jax.device_get(jnp.concatenate(acceptance_chunks, axis=0))
-    sampler = BlackJAXSamplerResult(chain, log_prob, acceptance=acceptance)
-    flat_samples = sampler.get_chain(flat=True, discard=burn)
-    flat_log_prob = sampler.get_log_prob(flat=True, discard=burn)
-    sls = _best_fit_system_from_samples(flat_samples, flat_log_prob, Rcomp, Mcomp, Teff, d)
-    final_walker_state = BlackJAXFitState(coords=sampler.chain[-1])
+    final_walker_state = BlackJAXFitState(coords=jax.device_get(state.position))
+    if return_sampler:
+        chain = jax.device_get(jnp.concatenate(chain_chunks, axis=0))
+        log_prob = jax.device_get(jnp.concatenate(log_prob_chunks, axis=0))
+        acceptance = jax.device_get(jnp.concatenate(acceptance_chunks, axis=0))
+        sampler = BlackJAXSamplerResult(chain, log_prob, acceptance=acceptance)
+        flat_samples = sampler.get_chain(flat=True, discard=burn)
+        flat_log_prob = sampler.get_log_prob(flat=True, discard=burn)
+        sls = _best_fit_system_from_samples(
+            flat_samples, flat_log_prob, Rcomp, Mcomp, Teff, d
+        )
+    else:
+        if best_position is None:
+            raise ValueError("burn must be smaller than nsteps when return_sampler=False")
+        sampler = None
+        sls = _best_fit_system_from_samples(
+            jax.device_get(best_position[jnp.newaxis, :]),
+            jax.device_get(best_log_prob[jnp.newaxis]),
+            Rcomp,
+            Mcomp,
+            Teff,
+            d,
+        )
     return sls, sampler, final_walker_state
 
 
