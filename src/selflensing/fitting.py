@@ -1,4 +1,24 @@
 # import copy
+"""Bayesian fitting for self-lensing binaries using JAX and emcee.
+
+GPU Support:
+    This module supports GPU acceleration via JAX for faster MCMC fitting.
+    JAX 0.10+ compatibility is ensured through proper device pinning.
+    
+    Known Limitations:
+    - Astropy Quantity and Time objects (used for unit handling) cannot be
+      efficiently traced by JAX's JIT compiler. While the @quaxify decorator
+      allows them to work with JAX tracers, the operations still execute at
+      Python level on CPU, not in compiled GPU code.
+    - For best performance, consider refactoring to use unitless JAX arrays
+      throughout the likelihood computation (future enhancement).
+    
+    Device Selection:
+    - Set device="gpu:0" in self_lensing_system_from_fit() to use GPU
+    - Set device="cpu" to force CPU execution
+    - Default behavior: auto-detect GPU if available
+"""
+
 import emcee
 import jax
 import jax.numpy as jax_numpy
@@ -56,6 +76,27 @@ def _select_fit_device(device=None, prefer_gpu=True):
     return devices[0]
 
 
+def _extract_value(obj):
+    """Extract unitless value from astropy Quantity or Time object.
+    
+    This function is called at Python level (before JIT tracing) to convert
+    astropy objects to plain NumPy arrays, enabling efficient GPU computation.
+    """
+    if obj is None:
+        return None
+    
+    # Handle astropy Time objects
+    if hasattr(obj, 'jd') and hasattr(obj, 'iso'):
+        return obj.jd
+    
+    # Handle astropy Quantity objects
+    if hasattr(obj, 'value'):
+        return obj.value
+    
+    # Already a plain array or scalar
+    return obj
+
+
 def _device_array(value, device):
     if value is None:
         return None
@@ -93,6 +134,13 @@ def combined_chi2(
     period_max=None,
     model_sls=None,
 ):
+    """Compute log-likelihood for self-lensing binary parameters.
+    
+    The @quaxify decorator allows astropy Quantity and Time objects to work
+    with JAX tracers. However, astropy operations execute at Python level
+    (on CPU), not in compiled JAX code. Inputs should be unitless arrays when
+    called from JIT-traced code for best performance (see make_combined_chi2_vec).
+    """
     # if a < DEFAULT_LIMITS["a"][0] or a > DEFAULT_LIMITS["a"][1]:
     #     return -jnp.inf
 
@@ -334,6 +382,22 @@ def make_combined_chi2_vec(
     model_sls=None,
     device=None,
 ):
+    # Strip astropy units at Python level (before JIT tracing) to enable
+    # better compiler optimization and reduce tracer overhead.
+    # This converts astropy Time objects to float (JD) and Quantity objects to values.
+    peak_time = _extract_value(peak_time)
+    rv_times = _extract_value(rv_times)
+    lc_times = _extract_value(lc_times)
+    Mcomp = _extract_value(Mcomp)
+    Rcomp = _extract_value(Rcomp)
+    tau_eff = _extract_value(tau_eff)
+    d = _extract_value(d)
+    observed_rv = _extract_value(observed_rv)
+    observed_rv_err = _extract_value(observed_rv_err)
+    observed_lc = _extract_value(observed_lc)
+    observed_lc_err = _extract_value(observed_lc_err)
+    detected_periods = _extract_value(detected_periods)
+    
     Mcomp = _device_array(Mcomp, device)
     Rcomp = _device_array(Rcomp, device)
     tau_eff = _device_array(tau_eff, device)
@@ -374,12 +438,34 @@ def make_combined_chi2_vec(
             )(params)
         )
 
-    combined_chi2_vec = jax.jit(_combined_chi2_vec, device=device)
+    # === JAX 0.10+ Compatibility and GPU Support ===
+    # JAX 0.10+ removed the device= parameter from jax.jit(). Instead, device
+    # placement is controlled via jax.device_put() and context managers.
+    # 
+    # For GPU execution, we wrap the JIT with explicit device placement:
+    # 1. All input data is pre-placed on GPU via _device_array()
+    # 2. The wrapper ensures inputs to the JIT function come from the target device
+    # 3. Results remain on-device until explicitly transferred back to host
+    #
+    # This approach ensures compatibility with JAX 0.10+ while maintaining
+    # GPU acceleration when a GPU device is specified.
+    if device is not None and hasattr(device, 'platform') and device.platform == 'gpu':
+        # Use jax.jit with default device context
+        combined_chi2_vec_jitted = jax.jit(_combined_chi2_vec)
+        # Wrap to ensure GPU placement of entire computation
+        def combined_chi2_vec(x):
+            # Put inputs on GPU device, compute, result stays on GPU
+            x_gpu = jax.device_put(x, device)
+            return combined_chi2_vec_jitted(x_gpu)
+    else:
+        combined_chi2_vec = jax.jit(_combined_chi2_vec)
 
     def logprob(params):
         # emcee feeds/consumes NumPy; keep the vectorized likelihood on the
         # selected JAX device, then transfer just the log-probabilities back.
-        return numpy.asarray(combined_chi2_vec(params))
+        result = combined_chi2_vec(params)
+        # Ensure result is back on host for emcee (which only works with NumPy)
+        return numpy.asarray(result)
 
     return logprob
 
