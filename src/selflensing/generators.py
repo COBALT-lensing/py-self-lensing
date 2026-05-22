@@ -49,7 +49,13 @@ class GeneratorBase(object):
 
     @property
     def time_offsets(self):
-        return (self.times - self.peak_time).jd.astype(numpy.float32) * units.day
+        times = self.times
+        peak_time = self.peak_time
+        if hasattr(times, "jd"):
+            times = times.jd
+        if hasattr(peak_time, "jd"):
+            peak_time = peak_time.jd
+        return unxt.Quantity(jnp.asarray(times) - jnp.asarray(peak_time), units.day)
 
     @property
     def peak_times(self):
@@ -88,7 +94,13 @@ class FlatLightcurveGenerator(GeneratorBase):
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
-        self.baseline = numpy.full(len(self.times), baseline) * self.units
+        if isinstance(self.times, jax.Array):
+            self.baseline = unxt.Quantity(
+                jnp.full(len(self.times), baseline),
+                self.units,
+            )
+        else:
+            self.baseline = numpy.full(len(self.times), baseline) * self.units
 
     def __str__(self):
         return "Generated Flat Light Curve"
@@ -567,8 +579,7 @@ class RVGenerator(GeneratorBase):
     units = units.m / units.s
 
     def phases(self):
-        time_offsets = (self.times - self.peak_time).to(units.day)
-        return self.lensing_system.time_to_phase(time_offsets)
+        return self.lensing_system.time_to_phase(self.time_offsets)
 
     @property
     def rv(self):
