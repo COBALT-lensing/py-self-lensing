@@ -137,6 +137,8 @@ def combined_chi2(
     period_min=None,
     period_max=None,
     model_sls=None,
+    rv_mask=None,
+    lc_mask=None,
 ):
     """Compute log-likelihood for self-lensing binary parameters.
 
@@ -264,10 +266,11 @@ def combined_chi2(
 
             def calc_rv_chi2():
                 rv_gen = RVGenerator(new_model_sls, times=rv_times, peak_time=peak_time)
-                return chi2(
+                return chi2_masked(
                     observed_rv.to(units.m / units.s).value,
                     observed_rv_err.to(units.m / units.s).value,
                     rv_gen.rv.to(units.m / units.s).value,
+                    rv_mask,
                 )
 
             def calc_lc_chi2():
@@ -283,10 +286,11 @@ def combined_chi2(
                         model_lc = model_lc.value
                     if center_lc_model:
                         model_lc = model_lc - 1.0
-                    return chi2(
+                    return chi2_masked(
                         observed_lc,
                         observed_lc_err,
                         model_lc,
+                        lc_mask,
                     )
 
                 def gp_chi2():
@@ -359,6 +363,15 @@ def combined_chi2(
 
 def chi2(obs, obs_err, model):
     return -jnp.sum((obs - model) ** 2 / obs_err**2) / len(obs)
+
+
+def chi2_masked(obs, obs_err, model, mask=None):
+    if mask is None:
+        return chi2(obs, obs_err, model)
+    mask = jnp.asarray(mask, dtype=bool)
+    weight = mask.astype(float)
+    n = jnp.maximum(jnp.sum(weight), 1.0)
+    return -jnp.sum(weight * (obs - model) ** 2 / obs_err**2) / n
 
 
 from functools import partial
@@ -565,6 +578,193 @@ def make_combined_chi2_vec_jax(
     return logprob
 
 
+def make_batched_combined_chi2_vec_jax(
+    Mcomp,
+    Rcomp,
+    tau_eff,
+    d,
+    peak_time,
+    rv_times,
+    observed_rv,
+    observed_rv_err,
+    lc_times,
+    observed_lc,
+    observed_lc_err,
+    gp,
+    detected_periods,
+    lensing_method,
+    center_lc_model=False,
+    weight_lc_peak=False,
+    period_min=None,
+    period_max=None,
+    model_sls=None,
+    rv_mask=None,
+    lc_mask=None,
+    device=None,
+):
+    """Build a JAX-native batched log-probability function.
+
+    Parameters with observations must already have a leading fit dimension.
+    Ragged observations should be padded to a common length and accompanied by
+    boolean masks with the same leading dimensions.
+    """
+    peak_time = _extract_value(peak_time)
+    rv_times = _extract_value(rv_times)
+    lc_times = _extract_value(lc_times)
+    Mcomp = _extract_value(Mcomp)
+    Rcomp = _extract_value(Rcomp)
+    tau_eff = _extract_value(tau_eff)
+    d = _extract_value(d)
+    observed_rv = _extract_value(observed_rv)
+    observed_rv_err = _extract_value(observed_rv_err)
+    observed_lc = _extract_value(observed_lc)
+    observed_lc_err = _extract_value(observed_lc_err)
+    detected_periods = _extract_value(detected_periods)
+    rv_mask = _extract_value(rv_mask)
+    lc_mask = _extract_value(lc_mask)
+    has_tau_eff = tau_eff is not None
+
+    peak_time = _device_array(peak_time, device)
+    rv_times = _device_array(rv_times, device)
+    lc_times = _device_array(lc_times, device)
+    Mcomp = _device_array(Mcomp, device)
+    Rcomp = _device_array(Rcomp, device)
+    tau_eff = _device_array(tau_eff, device)
+    d = _device_array(d, device)
+    observed_rv = _device_array(observed_rv, device)
+    observed_rv_err = _device_array(observed_rv_err, device)
+    observed_lc = _device_array(observed_lc, device)
+    observed_lc_err = _device_array(observed_lc_err, device)
+    detected_periods = _device_array(detected_periods, device)
+    rv_mask = _device_array(rv_mask, device)
+    lc_mask = _device_array(lc_mask, device)
+
+    if gp is not None:
+        raise NotImplementedError("Batched BlackJAX fitting does not support gp_model")
+
+    @quaxify
+    def _row_chi2_vec(
+        params,
+        row_Mcomp,
+        row_Rcomp,
+        row_tau_eff,
+        row_d,
+        row_peak_time,
+        row_rv_times,
+        row_observed_rv,
+        row_observed_rv_err,
+        row_lc_times,
+        row_observed_lc,
+        row_observed_lc_err,
+        row_rv_mask,
+        row_lc_mask,
+    ):
+        return jnp.asarray(
+            jax.vmap(
+                lambda p: combined_chi2(
+                    p,
+                    row_Mcomp,
+                    row_Rcomp,
+                    row_tau_eff,
+                    row_d,
+                    row_peak_time,
+                    row_rv_times,
+                    row_observed_rv,
+                    row_observed_rv_err,
+                    row_lc_times,
+                    row_observed_lc,
+                    row_observed_lc_err,
+                    None,
+                    detected_periods,
+                    lensing_method,
+                    center_lc_model,
+                    period_min,
+                    period_max,
+                    model_sls,
+                    row_rv_mask,
+                    row_lc_mask,
+                )
+            )(params)
+        )
+
+    @quaxify
+    def _batched_chi2_vec(params):
+        params = jax.device_put(jax_numpy.asarray(params), device)
+        return jnp.asarray(
+            (
+                jax.vmap(_row_chi2_vec)(
+                    params,
+                    Mcomp,
+                    Rcomp,
+                    tau_eff,
+                    d,
+                    peak_time,
+                    rv_times,
+                    observed_rv,
+                    observed_rv_err,
+                    lc_times,
+                    observed_lc,
+                    observed_lc_err,
+                    rv_mask,
+                    lc_mask,
+                )
+                if has_tau_eff
+                else jax.vmap(
+                    lambda row_params,
+                    row_Mcomp,
+                    row_Rcomp,
+                    row_d,
+                    row_peak_time,
+                    row_rv_times,
+                    row_observed_rv,
+                    row_observed_rv_err,
+                    row_lc_times,
+                    row_observed_lc,
+                    row_observed_lc_err,
+                    row_rv_mask,
+                    row_lc_mask: _row_chi2_vec(
+                        row_params,
+                        row_Mcomp,
+                        row_Rcomp,
+                        None,
+                        row_d,
+                        row_peak_time,
+                        row_rv_times,
+                        row_observed_rv,
+                        row_observed_rv_err,
+                        row_lc_times,
+                        row_observed_lc,
+                        row_observed_lc_err,
+                        row_rv_mask,
+                        row_lc_mask,
+                    )
+                )(
+                    params,
+                    Mcomp,
+                    Rcomp,
+                    d,
+                    peak_time,
+                    rv_times,
+                    observed_rv,
+                    observed_rv_err,
+                    lc_times,
+                    observed_lc,
+                    observed_lc_err,
+                    rv_mask,
+                    lc_mask,
+                )
+            )
+        )
+
+    batched_chi2_vec = jax.jit(_batched_chi2_vec)
+
+    def logprob(params):
+        params = jax.device_put(params, device)
+        return batched_chi2_vec(params)
+
+    return logprob
+
+
 @dataclass
 class BlackJAXFitState:
     coords: numpy.ndarray
@@ -637,6 +837,45 @@ def _initial_walker_positions(nwalkers, initial_walker_state=None):
     return numpy.asarray(list(zip(*p0)), dtype=float)
 
 
+def _initial_batched_walker_positions(nfits, nwalkers, initial_walker_state=None):
+    ndim = 5
+    if initial_walker_state is not None:
+        initial_walker_coords = getattr(
+            initial_walker_state,
+            "coords",
+            initial_walker_state,
+        )
+        initial_walker_coords = numpy.asarray(initial_walker_coords)
+        if initial_walker_coords.ndim == 2:
+            if initial_walker_coords.shape[1] != ndim:
+                raise ValueError(
+                    "initial_walker_state must have coordinates with shape "
+                    f"(nwalkers, {ndim}) or (nfits, nwalkers, {ndim})"
+                )
+            if initial_walker_coords.shape[0] != nwalkers:
+                nwalkers = initial_walker_coords.shape[0]
+            return numpy.broadcast_to(
+                initial_walker_coords[None, :, :],
+                (nfits, nwalkers, ndim),
+            ).copy()
+        if initial_walker_coords.ndim == 3:
+            if initial_walker_coords.shape[0] != nfits or initial_walker_coords.shape[2] != ndim:
+                raise ValueError(
+                    "initial_walker_state must have coordinates with shape "
+                    f"(nwalkers, {ndim}) or (nfits, nwalkers, {ndim})"
+                )
+            return initial_walker_coords
+        raise ValueError(
+            "initial_walker_state must have coordinates with shape "
+            f"(nwalkers, {ndim}) or (nfits, nwalkers, {ndim})"
+        )
+
+    return numpy.stack(
+        [_initial_walker_positions(nwalkers) for _ in range(nfits)],
+        axis=0,
+    )
+
+
 def _default_blackjax_proposal_scale():
     scale_fraction = 0.02
     return jnp.asarray(
@@ -671,6 +910,27 @@ def _best_fit_system_from_samples(flat_samples, flat_log_prob, Rcomp, Mcomp, Tef
         * SelfLensingSystem.param_units["periapsis_phase"],
         d=d,
     )
+
+
+def _best_fit_systems_from_positions(positions, Rcomp, Mcomp, Teff, d):
+    systems = []
+    for index, res in enumerate(numpy.asarray(positions)):
+        out_a, out_i, out_Macc, out_e, out_periapsis_phase = res
+        systems.append(
+            SelfLensingSystem(
+                a=out_a * SelfLensingSystem.param_units["a"],
+                i=out_i * SelfLensingSystem.param_units["i"],
+                Macc=out_Macc * SelfLensingSystem.param_units["Macc"],
+                Rcomp=Rcomp[index],
+                Mcomp=Mcomp[index],
+                Teff=None if Teff is None else Teff[index],
+                e=out_e * SelfLensingSystem.param_units["e"],
+                periapsis_phase=out_periapsis_phase
+                * SelfLensingSystem.param_units["periapsis_phase"],
+                d=d[index],
+            )
+        )
+    return systems
 
 
 @units.quantity_input
@@ -924,6 +1184,251 @@ def self_lensing_system_from_fit_blackjax(
             d,
         )
     return sls, sampler, final_walker_state
+
+
+def _batched_quantity(quantity, unit, nfits, name):
+    if quantity is None:
+        return None
+    quantity = quantity.to(unit)
+    values = numpy.asarray(quantity.value)
+    if values.ndim == 0:
+        values = numpy.full(nfits, values.item())
+    if values.shape[0] != nfits:
+        raise ValueError(f"{name} must have length {nfits}; got shape {values.shape}")
+    return values * unit
+
+
+@units.quantity_input
+def self_lensing_systems_from_batched_fit_blackjax(
+    Mcomp: units.kg,
+    peak_time,
+    rv_times=None,
+    observed_rv=None,
+    observed_rv_err=None,
+    rv_mask=None,
+    lc_times=None,
+    observed_lc=None,
+    observed_lc_err=None,
+    lc_mask=None,
+    gp_model=None,
+    Rcomp: units.m = None,
+    Teff: units.K = None,
+    tau_eff: units.day = None,
+    d: units.pc = SelfLensingSystem.DEFAULT_D,
+    false_alarm_probability=0.1,
+    detect_periods=False,
+    periods=[],
+    period_min: units.day = None,
+    period_max: units.day = None,
+    weight_lc_peak=False,
+    nwalkers=100,
+    nsteps=5000,
+    burn=500,
+    lensing_method=None,
+    center_lc_model=False,
+    progress=True,
+    progress_desc=None,
+    prefer_gpu=True,
+    device=None,
+    initial_walker_state=None,
+    proposal_scale=None,
+    random_seed=0,
+    progress_chunk_size=100,
+    return_sampler=False,
+    return_walker_state=False,
+):
+    """Fit many independent systems in one batched BlackJAX-style run.
+
+    Observation arrays must have a leading fit dimension. Ragged RV/LC series
+    should be padded to a common length and accompanied by boolean masks. The
+    sampler tracks the best post-burn sample for each fit on device and copies
+    the batched best positions back once at the end.
+    """
+    if return_sampler:
+        raise NotImplementedError(
+            "Batched BlackJAX fitting currently supports return_sampler=False only"
+        )
+    if observed_rv is None and observed_lc is None:
+        raise RuntimeError("You must provide at least one of observed_rv, observed_lc")
+    if Rcomp is None:
+        raise NotImplementedError(
+            "Batched BlackJAX fitting requires Rcomp to be provided"
+        )
+    if gp_model is not None:
+        raise NotImplementedError("Batched BlackJAX fitting does not support gp_model")
+    if detect_periods:
+        raise NotImplementedError(
+            "Batched BlackJAX fitting does not currently support detect_periods=True"
+        )
+
+    fit_device = _select_fit_device(device=device, prefer_gpu=prefer_gpu)
+    if lensing_method is None:
+        lensing_method = (
+            SelfLensingLightcurveGenerator.default_lensing_method_for_device(fit_device)
+        )
+    logging.info(
+        "batched blackjax fit: using JAX %s device %s with lensing_method=%s",
+        fit_device.platform,
+        fit_device,
+        lensing_method,
+    )
+
+    Mcomp = Mcomp.to(SelfLensingSystem.param_units["Mcomp"])
+    nfits = int(numpy.asarray(Mcomp.value).shape[0])
+    Rcomp = _batched_quantity(Rcomp, SelfLensingSystem.param_units["Rcomp"], nfits, "Rcomp")
+    Mcomp = _batched_quantity(Mcomp, SelfLensingSystem.param_units["Mcomp"], nfits, "Mcomp")
+    Teff = _batched_quantity(Teff, SelfLensingSystem.param_units["Teff"], nfits, "Teff")
+    d = _batched_quantity(d, SelfLensingSystem.param_units["d"], nfits, "d")
+    if tau_eff is not None:
+        tau_eff = _batched_quantity(
+            tau_eff, SelfLensingSystem.param_units["tau_eff"], nfits, "tau_eff"
+        )
+    if observed_rv is not None:
+        observed_rv = observed_rv.to(units.m / units.s)
+    if observed_rv_err is not None:
+        observed_rv_err = observed_rv_err.to(units.m / units.s)
+    if observed_lc is not None and hasattr(observed_lc, "to"):
+        observed_lc = observed_lc.to(units.dimensionless_unscaled)
+    if observed_lc_err is not None and hasattr(observed_lc_err, "to"):
+        observed_lc_err = observed_lc_err.to(units.dimensionless_unscaled)
+
+    default_sls = SelfLensingSystem(
+        0 * SelfLensingSystem.param_units["Macc"],
+        0 * SelfLensingSystem.param_units["Mcomp"],
+        0 * SelfLensingSystem.param_units["Rcomp"],
+        0 * SelfLensingSystem.param_units["a"],
+    )
+    detected_periods = jnp.array(periods) if len(periods) > 0 else jnp.array([])
+    logprob_vec = make_batched_combined_chi2_vec_jax(
+        Mcomp.value,
+        Rcomp.value,
+        tau_eff.value if tau_eff is not None else None,
+        d.value,
+        peak_time,
+        rv_times,
+        observed_rv.value if observed_rv is not None else None,
+        observed_rv_err.value if observed_rv_err is not None else None,
+        lc_times,
+        observed_lc.value if hasattr(observed_lc, "value") else observed_lc,
+        observed_lc_err.value if hasattr(observed_lc_err, "value") else observed_lc_err,
+        gp_model,
+        detected_periods,
+        lensing_method,
+        center_lc_model,
+        weight_lc_peak,
+        period_min,
+        period_max,
+        default_sls,
+        rv_mask,
+        lc_mask,
+        fit_device,
+    )
+
+    nwalkers = int(nwalkers)
+    nsteps = int(nsteps)
+    burn = int(burn)
+    p0 = _initial_batched_walker_positions(nfits, nwalkers, initial_walker_state)
+    nwalkers = p0.shape[1]
+    position = jax.device_put(jax_numpy.asarray(p0), fit_device)
+    log_prob = logprob_vec(position)
+
+    if proposal_scale is None:
+        proposal_scale = _default_blackjax_proposal_scale()
+    proposal_scale = jax.device_put(jax_numpy.asarray(proposal_scale), fit_device)
+
+    def one_step(carry, rng_key):
+        position, log_prob = carry
+        proposal_key, accept_key = jax.random.split(rng_key)
+        proposal = position + jax.random.normal(
+            proposal_key, shape=position.shape
+        ) * proposal_scale
+        proposal_log_prob = logprob_vec(proposal)
+        log_accept_ratio = proposal_log_prob - log_prob
+        accepted = jnp.log(
+            jax.random.uniform(accept_key, shape=log_prob.shape)
+        ) < log_accept_ratio
+        new_position = jnp.where(accepted[..., None], proposal, position)
+        new_log_prob = jnp.where(accepted, proposal_log_prob, log_prob)
+        return (new_position, new_log_prob), (new_position, new_log_prob, accepted)
+
+    @jax.jit
+    def run_steps(position, log_prob, rng_keys):
+        return jax.lax.scan(one_step, (position, log_prob), rng_keys)
+
+    rng_key = jax.random.PRNGKey(random_seed)
+    best_position = None
+    best_log_prob = jnp.full((nfits,), -jnp.inf)
+    remaining_steps = nsteps
+    completed_steps = 0
+    if progress:
+        progress_iter = tqdm(
+            total=nsteps,
+            desc=progress_desc,
+            disable=not progress,
+        )
+    else:
+        progress_iter = None
+
+    try:
+        chunk_size = nsteps if not progress else max(1, int(progress_chunk_size))
+        while remaining_steps > 0:
+            current_chunk_size = min(chunk_size, remaining_steps)
+            rng_key, sample_key = jax.random.split(rng_key)
+            step_keys = jax.random.split(sample_key, current_chunk_size)
+            (position, log_prob), (positions, chunk_log_prob, _) = run_steps(
+                position, log_prob, step_keys
+            )
+            if completed_steps + current_chunk_size > burn:
+                post_burn_start = max(0, burn - completed_steps)
+                chunk_positions = positions[post_burn_start:]
+                chunk_log_prob = chunk_log_prob[post_burn_start:]
+                chunk_positions_by_row = jnp.swapaxes(chunk_positions, 0, 1)
+                chunk_log_prob_by_row = jnp.swapaxes(chunk_log_prob, 0, 1)
+                flat_chunk_positions = chunk_positions_by_row.reshape(
+                    (nfits, -1, chunk_positions.shape[-1])
+                )
+                flat_chunk_log_prob = chunk_log_prob_by_row.reshape((nfits, -1))
+                best_indices = jnp.argmax(flat_chunk_log_prob, axis=1)
+                row_indices = jnp.arange(nfits)
+                chunk_best_log_prob = flat_chunk_log_prob[row_indices, best_indices]
+                chunk_best_position = flat_chunk_positions[row_indices, best_indices]
+                use_chunk_best = chunk_best_log_prob > best_log_prob
+                best_log_prob = jnp.where(
+                    use_chunk_best, chunk_best_log_prob, best_log_prob
+                )
+                best_position = (
+                    chunk_best_position
+                    if best_position is None
+                    else jnp.where(
+                        use_chunk_best[:, None],
+                        chunk_best_position,
+                        best_position,
+                    )
+                )
+            remaining_steps -= current_chunk_size
+            completed_steps += current_chunk_size
+            if progress_iter is not None:
+                progress_iter.update(current_chunk_size)
+    finally:
+        if progress_iter is not None:
+            progress_iter.close()
+
+    if best_position is None:
+        raise ValueError("burn must be smaller than nsteps when return_sampler=False")
+
+    final_walker_state = (
+        BlackJAXFitState(coords=jax.device_get(position))
+        if return_walker_state
+        else None
+    )
+    systems = _best_fit_systems_from_positions(
+        jax.device_get(best_position),
+        Rcomp,
+        Mcomp,
+        Teff,
+        d,
+    )
+    return systems, None, final_walker_state
 
 
 @units.quantity_input
