@@ -494,7 +494,7 @@ def self_lensing_system_from_fit(
     nwalkers=100,
     nsteps=5000,
     burn=500,
-    lensing_method=SelfLensingLightcurveGenerator.DEFAULT_LENSING_METHOD,
+    lensing_method=None,
     center_lc_model=False,
     pool=None,
     progress=True,
@@ -531,10 +531,15 @@ def self_lensing_system_from_fit(
         raise RuntimeError("You must provide at least one of observed_rv, observed_ts")
 
     fit_device = _select_fit_device(device=device, prefer_gpu=prefer_gpu)
+    if lensing_method is None:
+        lensing_method = SelfLensingLightcurveGenerator.default_lensing_method_for_device(
+            fit_device
+        )
     logging.info(
-        "fit: using JAX %s device %s",
+        "fit: using JAX %s device %s with lensing_method=%s",
         fit_device.platform,
         fit_device,
+        lensing_method,
     )
 
     default_sls = SelfLensingSystem(

@@ -9,7 +9,7 @@ import unxt
 import jax
 from jax import numpy as jnp
 
-from .lensing import wm_callback
+from .lensing import integrated_witt_mao_magnification_jax, wm_callback
 from .models import SelfLensingSystem, _quantity_value
 
 # from src.selflensing.gp.LensingGP import _run_nucs_safe
@@ -284,12 +284,26 @@ class EllipsoidalVariationsLightcurveGenerator(FlatLightcurveGenerator):
 
 class SelfLensingLightcurveGenerator(FlatLightcurveGenerator):
     DEFAULT_LENSING_METHOD = "IntegratedWittMao"
+    DEFAULT_GPU_LENSING_METHOD = "IntegratedWittMaoJax"
 
     lensing_methods = {
         "IntegratedHeyrovsky": "integrated_heyrovsky_amplification",
         "IntegratedWittMao": "integrated_witt_mao_amplification",
+        "IntegratedWittMaoJax": "integrated_witt_mao_jax_amplification",
+        "JaxWittMao": "integrated_witt_mao_jax_amplification",
         "WittMao": "witt_mao_amplification",
     }
+
+    @classmethod
+    def default_lensing_method_for_device(cls, device=None):
+        platform = getattr(device, "platform", None)
+        if platform is None and device is not None:
+            platform = str(device).split(":", 1)[0].lower()
+            if platform == "cuda":
+                platform = "gpu"
+        if platform == "gpu":
+            return cls.DEFAULT_GPU_LENSING_METHOD
+        return cls.DEFAULT_LENSING_METHOD
 
     def __init__(self, *args, lensing_method=DEFAULT_LENSING_METHOD, **kwargs):
         super().__init__(*args, **kwargs)
@@ -382,6 +396,14 @@ class SelfLensingLightcurveGenerator(FlatLightcurveGenerator):
         #     ),
         #     float,
         # )
+
+    @property
+    def integrated_witt_mao_jax_amplification(self):
+        return integrated_witt_mao_magnification_jax(
+            self.lensing_system.time_to_b(self.time_offsets),
+            self.lensing_system.rE().to(units.m).value,
+            self.lensing_system.Rcomp.to(units.m).value,
+        )
 
     @property
     def witt_mao_amplification(self):
