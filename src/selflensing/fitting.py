@@ -708,6 +708,7 @@ def self_lensing_system_from_fit_blackjax(
     random_seed=0,
     progress_chunk_size=100,
     return_sampler=True,
+    return_walker_state=True,
 ):
     """Fit using a BlackJAX random-walk Metropolis-Hastings backend.
 
@@ -732,6 +733,9 @@ def self_lensing_system_from_fit_blackjax(
     - Set return_sampler=False for production fits that do not need chain
       diagnostics. In that mode the best sample is tracked on device and the
       full chain is not copied back to host memory.
+    - Set return_walker_state=False when the caller does not need to seed a
+      later fit from the final walker positions. This avoids copying the final
+      walker coordinates back from the accelerator.
     """
     import blackjax
 
@@ -892,7 +896,11 @@ def self_lensing_system_from_fit_blackjax(
         if progress_iter is not None:
             progress_iter.close()
 
-    final_walker_state = BlackJAXFitState(coords=jax.device_get(state.position))
+    final_walker_state = (
+        BlackJAXFitState(coords=jax.device_get(state.position))
+        if return_walker_state
+        else None
+    )
     if return_sampler:
         chain = jax.device_get(jnp.concatenate(chain_chunks, axis=0))
         log_prob = jax.device_get(jnp.concatenate(log_prob_chunks, axis=0))
