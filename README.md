@@ -24,21 +24,21 @@ Fitting uses JAX for the vectorised likelihood calculation. A normal install use
 JAX's CPU backend, but if a GPU-enabled JAX backend is installed the fitter will
 prefer it automatically.
 
-For development installs with Poetry, install one of the optional GPU groups:
+For development installs with uv, sync one of the optional GPU extras:
 
 ```shell
-poetry install --with cuda
+uv sync --extra cuda
 ```
 
 `cuda` is an alias for the current recommended NVIDIA CUDA 13 wheels. Other
-available groups are:
+available extras are:
 
 ```shell
-poetry install --with cuda13
-poetry install --with cuda12
-poetry install --with cuda13-local
-poetry install --with cuda12-local
-poetry install --with rocm
+uv sync --extra cuda13
+uv sync --extra cuda12
+uv sync --extra cuda13-local
+uv sync --extra cuda12-local
+uv sync --extra rocm
 ```
 
 Use the `*-local` groups only when CUDA and cuDNN are already installed on the
@@ -54,7 +54,7 @@ pip install "git+https://github.com/COBALT-lensing/py-self-lensing.git#egg=selfl
 Check which backend JAX can see with:
 
 ```shell
-python -c "import jax; print(jax.devices())"
+uv run python -c "import jax; print(jax.devices())"
 ```
 
 The fitting function also accepts explicit device controls:

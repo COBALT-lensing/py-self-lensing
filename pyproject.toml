@@ -46,39 +46,3 @@ cuda13-local = ["jax[cuda13-local]>=0.8.1,<1.0.0"]
 cuda12-local = ["jax[cuda12-local]>=0.8.1,<1.0.0"]
 rocm = ["jax[rocm7-local]>=0.8.1,<1.0.0"]
 demo = ["ipykernel (>=7.0.0,<8.0.0)", "matplotlib (>=3.10.5,<4.0.0)", "corner (>=2.2.3,<3.0.0)"]
-
-[tool.poetry.group.cuda]
-optional = true
-
-[tool.poetry.group.cuda.dependencies]
-jax = {version = ">=0.8.1,<1.0.0", extras = ["cuda13"]}
-
-[tool.poetry.group.cuda13]
-optional = true
-
-[tool.poetry.group.cuda13.dependencies]
-jax = {version = ">=0.8.1,<1.0.0", extras = ["cuda13"]}
-
-[tool.poetry.group.cuda12]
-optional = true
-
-[tool.poetry.group.cuda12.dependencies]
-jax = {version = ">=0.8.1,<1.0.0", extras = ["cuda12"]}
-
-[tool.poetry.group.cuda13-local]
-optional = true
-
-[tool.poetry.group.cuda13-local.dependencies]
-jax = {version = ">=0.8.1,<1.0.0", extras = ["cuda13-local"]}
-
-[tool.poetry.group.cuda12-local]
-optional = true
-
-[tool.poetry.group.cuda12-local.dependencies]
-jax = {version = ">=0.8.1,<1.0.0", extras = ["cuda12-local"]}
-
-[tool.poetry.group.rocm]
-optional = true
-
-[tool.poetry.group.rocm.dependencies]
-jax = {version = ">=0.8.1,<1.0.0", extras = ["rocm7-local"]}
