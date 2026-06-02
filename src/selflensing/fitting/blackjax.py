@@ -449,6 +449,20 @@ def _batched_quantity(quantity, unit, nfits, name):
     return values * unit
 
 
+def _batched_observation_block(times, observed, observed_err, mask, nfits):
+    if observed is None:
+        shape = (nfits, 1)
+        return (
+            numpy.zeros(shape, dtype=float),
+            numpy.zeros(shape, dtype=float),
+            numpy.ones(shape, dtype=float),
+            numpy.zeros(shape, dtype=bool),
+        )
+    if mask is None:
+        mask = numpy.ones(numpy.asarray(observed).shape, dtype=bool)
+    return times, observed, observed_err, mask
+
+
 @units.quantity_input
 def self_lensing_systems_from_batched_fit_blackjax(
     Mcomp: units.kg,
@@ -543,6 +557,21 @@ def self_lensing_systems_from_batched_fit_blackjax(
     if observed_lc_err is not None and hasattr(observed_lc_err, "to"):
         observed_lc_err = observed_lc_err.to(units.dimensionless_unscaled)
 
+    rv_times, observed_rv, observed_rv_err, rv_mask = _batched_observation_block(
+        rv_times,
+        observed_rv.value if observed_rv is not None else None,
+        observed_rv_err.value if observed_rv_err is not None else None,
+        rv_mask,
+        nfits,
+    )
+    lc_times, observed_lc, observed_lc_err, lc_mask = _batched_observation_block(
+        lc_times,
+        observed_lc.value if hasattr(observed_lc, "value") else observed_lc,
+        observed_lc_err.value if hasattr(observed_lc_err, "value") else observed_lc_err,
+        lc_mask,
+        nfits,
+    )
+
     default_sls = SelfLensingSystem(
         0 * SelfLensingSystem.param_units["Macc"],
         0 * SelfLensingSystem.param_units["Mcomp"],
@@ -557,11 +586,11 @@ def self_lensing_systems_from_batched_fit_blackjax(
         d.value,
         peak_time,
         rv_times,
-        observed_rv.value if observed_rv is not None else None,
-        observed_rv_err.value if observed_rv_err is not None else None,
+        observed_rv,
+        observed_rv_err,
         lc_times,
-        observed_lc.value if hasattr(observed_lc, "value") else observed_lc,
-        observed_lc_err.value if hasattr(observed_lc_err, "value") else observed_lc_err,
+        observed_lc,
+        observed_lc_err,
         gp_model,
         detected_periods,
         lensing_method,
