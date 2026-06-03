@@ -142,14 +142,21 @@ def combined_chi2(
             return gauss_lnprior(model_tau_eff, tau_eff, tau_eff / 100)
 
         def calc_errs():
+            finite_detected_periods = jnp.where(
+                jnp.isfinite(detected_periods),
+                detected_periods,
+                jnp.inf,
+            )
             period_err = jax.lax.cond(
-                jnp.size(detected_periods) > 0,
+                jnp.any(jnp.isfinite(detected_periods)),
                 lambda a, b: gauss_lnprior(
-                    a, b[jnp.argmin(jnp.abs(b - a))] if b.size > 0 else a, 0.1
+                    a,
+                    b[jnp.argmin(jnp.abs(b - a))] if b.size > 0 else a,
+                    0.1,
                 ),
                 zero,
                 new_model_sls.porb.value,
-                detected_periods,
+                finite_detected_periods,
             )
 
             if tau_eff is None:
@@ -553,6 +560,7 @@ def make_batched_combined_chi2_vec_jax(
         row_lc_times,
         row_observed_lc,
         row_observed_lc_err,
+        row_detected_periods,
         row_rv_mask,
         row_lc_mask,
     ):
@@ -572,7 +580,7 @@ def make_batched_combined_chi2_vec_jax(
                     row_observed_lc,
                     row_observed_lc_err,
                     None,
-                    detected_periods,
+                    row_detected_periods,
                     lensing_method,
                     center_lc_model,
                     period_min,
@@ -602,6 +610,7 @@ def make_batched_combined_chi2_vec_jax(
                     lc_times,
                     observed_lc,
                     observed_lc_err,
+                    detected_periods,
                     rv_mask,
                     lc_mask,
                 )
@@ -618,6 +627,7 @@ def make_batched_combined_chi2_vec_jax(
                     row_lc_times,
                     row_observed_lc,
                     row_observed_lc_err,
+                    row_detected_periods,
                     row_rv_mask,
                     row_lc_mask: _row_chi2_vec(
                         row_params,
@@ -632,6 +642,7 @@ def make_batched_combined_chi2_vec_jax(
                         row_lc_times,
                         row_observed_lc,
                         row_observed_lc_err,
+                        row_detected_periods,
                         row_rv_mask,
                         row_lc_mask,
                     )
@@ -647,6 +658,7 @@ def make_batched_combined_chi2_vec_jax(
                     lc_times,
                     observed_lc,
                     observed_lc_err,
+                    detected_periods,
                     rv_mask,
                     lc_mask,
                 )

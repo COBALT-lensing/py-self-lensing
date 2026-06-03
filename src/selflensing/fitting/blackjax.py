@@ -463,6 +463,34 @@ def _batched_observation_block(times, observed, observed_err, mask, nfits):
     return times, observed, observed_err, mask
 
 
+def _batched_periods(periods, nfits):
+    if hasattr(periods, "to"):
+        periods = periods.to(units.day).value
+    if len(periods) == 0:
+        return numpy.full((nfits, 0), numpy.nan, dtype=float)
+
+    period_array = numpy.asarray(periods, dtype=object)
+    if period_array.ndim == 1 and all(numpy.isscalar(value) for value in period_array):
+        period_values = numpy.asarray(periods, dtype=float)
+        return numpy.tile(period_values, (nfits, 1))
+
+    rows = []
+    for row in periods:
+        if hasattr(row, "to"):
+            row = row.to(units.day).value
+        values = numpy.ravel(numpy.asarray(row, dtype=float))
+        values = values[numpy.isfinite(values)]
+        rows.append(values)
+    if len(rows) != nfits:
+        raise ValueError("Batched periods must have one row per fit")
+
+    width = max((len(row) for row in rows), default=0)
+    padded = numpy.full((nfits, width), numpy.nan, dtype=float)
+    for index, row in enumerate(rows):
+        padded[index, : len(row)] = row
+    return padded
+
+
 @units.quantity_input
 def self_lensing_systems_from_batched_fit_blackjax(
     Mcomp: units.kg,
@@ -578,7 +606,7 @@ def self_lensing_systems_from_batched_fit_blackjax(
         0 * SelfLensingSystem.param_units["Rcomp"],
         0 * SelfLensingSystem.param_units["a"],
     )
-    detected_periods = jnp.array(periods) if len(periods) > 0 else jnp.array([])
+    detected_periods = jnp.array(_batched_periods(periods, nfits))
     logprob_vec = make_batched_combined_chi2_vec_jax(
         Mcomp.value,
         Rcomp.value,
