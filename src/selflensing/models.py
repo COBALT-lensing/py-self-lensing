@@ -32,6 +32,14 @@ def _quantity_value(quantity, unit=None):
     return quantity.value if hasattr(quantity, "value") else quantity
 
 
+def _as_quantity(quantity, unit=None):
+    if unit is not None and hasattr(quantity, "to"):
+        quantity = quantity.to(unit)
+    if hasattr(quantity, "value") and hasattr(quantity, "unit"):
+        return Quantity(jnp.asarray(quantity.value), quantity.unit)
+    return Quantity(jnp.asarray(quantity), unit)
+
+
 class SelfLensingSystem(object):
     param_units = {
         "a": units.au,
@@ -117,26 +125,24 @@ class SelfLensingSystem(object):
             a = (constants.G * (Macc + Mcomp) * (Porb / (2 * numpy.pi)) ** 2) ** (
                 1.0 / 3.0
             )
-        self.a = Quantity.from_(a.to(self.param_units["a"]))
+        self.a = _as_quantity(a, self.param_units["a"])
 
         if Rcomp is None:
             Rcomp = stellar_radius_Rsun(Mcomp.to(units.M_sun).value) * units.R_sun
 
         if Teff is None:
-            Teff = Quantity.from_(
-                effective_temperature_K(Mcomp.to(units.M_sun).value), units.K
-            )
-        self.Teff = Quantity.from_(Teff.to(self.param_units["Teff"]))
+            Teff = effective_temperature_K(Mcomp.to(units.M_sun).value) * units.K
+        self.Teff = _as_quantity(Teff, self.param_units["Teff"])
 
-        self.Macc = Quantity.from_(Macc.to(self.param_units["Macc"]))
-        self.Rcomp = Quantity.from_(Rcomp.to(self.param_units["Rcomp"]))
-        self.Mcomp = Quantity.from_(Mcomp.to(self.param_units["Mcomp"]))
-        self.e = Quantity.from_(e)
-        self.periapsis_phase = Quantity.from_(
-            periapsis_phase.to(self.param_units["periapsis_phase"])
+        self.Macc = _as_quantity(Macc, self.param_units["Macc"])
+        self.Rcomp = _as_quantity(Rcomp, self.param_units["Rcomp"])
+        self.Mcomp = _as_quantity(Mcomp, self.param_units["Mcomp"])
+        self.e = _as_quantity(e, self.param_units["e"])
+        self.periapsis_phase = _as_quantity(
+            periapsis_phase, self.param_units["periapsis_phase"]
         )
-        self.i = Quantity.from_(i.to(self.param_units["i"]))
-        self.d = Quantity.from_(d.to(self.param_units["d"]))
+        self.i = _as_quantity(i, self.param_units["i"])
+        self.d = _as_quantity(d, self.param_units["d"])
 
     @property
     def b(self):
