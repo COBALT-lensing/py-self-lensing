@@ -535,12 +535,10 @@ def self_lensing_systems_from_batched_fit_blackjax(
     Observation arrays must have a leading fit dimension. Ragged RV/LC series
     should be padded to a common length and accompanied by boolean masks. The
     sampler tracks the best post-burn sample for each fit on device and copies
-    the batched best positions back once at the end.
+    the batched best positions back once at the end. When ``return_sampler`` is
+    enabled, the full chain is copied back to host memory and returned as one
+    ``BlackJAXSamplerResult`` per fit.
     """
-    if return_sampler:
-        raise NotImplementedError(
-            "Batched BlackJAX fitting currently supports return_sampler=False only"
-        )
     if observed_rv is None and observed_lc is None:
         raise RuntimeError("You must provide at least one of observed_rv, observed_lc")
     if Rcomp is None:
@@ -664,6 +662,9 @@ def self_lensing_systems_from_batched_fit_blackjax(
         return jax.lax.scan(one_step, (position, log_prob), rng_keys)
 
     rng_key = jax.random.PRNGKey(random_seed)
+    chain_chunks = []
+    log_prob_chunks = []
+    acceptance_chunks = []
     best_position = None
     best_log_prob = jnp.full((nfits,), -jnp.inf)
     remaining_steps = nsteps
@@ -683,9 +684,13 @@ def self_lensing_systems_from_batched_fit_blackjax(
             current_chunk_size = min(chunk_size, remaining_steps)
             rng_key, sample_key = jax.random.split(rng_key)
             step_keys = jax.random.split(sample_key, current_chunk_size)
-            (position, log_prob), (positions, chunk_log_prob, _) = run_steps(
+            (position, log_prob), (positions, chunk_log_prob, accepted) = run_steps(
                 position, log_prob, step_keys
             )
+            if return_sampler:
+                chain_chunks.append(positions)
+                log_prob_chunks.append(chunk_log_prob)
+                acceptance_chunks.append(accepted)
             if completed_steps + current_chunk_size > burn:
                 post_burn_start = max(0, burn - completed_steps)
                 chunk_positions = positions[post_burn_start:]
@@ -736,4 +741,18 @@ def self_lensing_systems_from_batched_fit_blackjax(
         Teff,
         d,
     )
-    return systems, None, final_walker_state
+    if return_sampler:
+        chain = jax.device_get(jnp.concatenate(chain_chunks, axis=0))
+        log_prob = jax.device_get(jnp.concatenate(log_prob_chunks, axis=0))
+        acceptance = jax.device_get(jnp.concatenate(acceptance_chunks, axis=0))
+        samplers = [
+            BlackJAXSamplerResult(
+                chain[:, fit_index, :, :],
+                log_prob[:, fit_index, :],
+                acceptance=acceptance[:, fit_index, :],
+            )
+            for fit_index in range(nfits)
+        ]
+    else:
+        samplers = None
+    return systems, samplers, final_walker_state
