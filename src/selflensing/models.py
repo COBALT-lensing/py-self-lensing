@@ -128,10 +128,14 @@ class SelfLensingSystem(object):
         self.a = _as_quantity(a, self.param_units["a"])
 
         if Rcomp is None:
-            Rcomp = stellar_radius_Rsun(Mcomp.to(units.M_sun).value) * units.R_sun
+            Rcomp = Quantity(
+                stellar_radius_Rsun(Mcomp.to(units.M_sun).value), units.R_sun
+            )
 
         if Teff is None:
-            Teff = effective_temperature_K(Mcomp.to(units.M_sun).value) * units.K
+            Teff = Quantity(
+                effective_temperature_K(Mcomp.to(units.M_sun).value), units.K
+            )
         self.Teff = _as_quantity(Teff, self.param_units["Teff"])
 
         self.Macc = _as_quantity(Macc, self.param_units["Macc"])
