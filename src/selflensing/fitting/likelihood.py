@@ -123,15 +123,31 @@ def combined_chi2(
         #     new_model_sls.d = d
 
         def check_sls_props():
-            return (
-                (period_min is None or new_model_sls.porb >= period_min)
-                and (period_max is None or new_model_sls.porb <= period_max)
-                and (
-                    tau_eff is None
-                    or numpy.isnan(tau_eff)
-                    or jnp.isfinite(new_model_sls.tau_eff.value)
+            def condition_value(condition):
+                return jnp.asarray(
+                    condition.value if hasattr(condition, "value") else condition
                 )
-            )
+
+            props_ok = condition_value(new_model_sls.sl_possible)
+            if period_min is not None:
+                props_ok = jnp.logical_and(
+                    props_ok,
+                    condition_value(new_model_sls.porb >= period_min),
+                )
+            if period_max is not None:
+                props_ok = jnp.logical_and(
+                    props_ok,
+                    condition_value(new_model_sls.porb <= period_max),
+                )
+            if tau_eff is not None:
+                props_ok = jnp.logical_and(
+                    props_ok,
+                    jnp.logical_or(
+                        jnp.isnan(tau_eff),
+                        jnp.isfinite(new_model_sls.tau_eff.value),
+                    ),
+                )
+            return props_ok
 
         def zero(*args, **kwargs):
             return 0.0
@@ -163,7 +179,7 @@ def combined_chi2(
                 tau_eff_err = zero()
             else:
                 tau_eff_err = jax.lax.cond(
-                    not numpy.isnan(tau_eff),
+                    jnp.logical_not(jnp.isnan(tau_eff)),
                     tau_eff_prior,
                     zero,
                     new_model_sls.tau_eff,
