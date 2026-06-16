@@ -206,11 +206,7 @@ class DopplerBoostingLightcurveGenerator(FlatLightcurveGenerator):
             self.lensing_system, times=self.times, peak_time=self.peak_time
         )
         rv = rvg.rv.to(units.m / units.s)
-        return (
-            (3 - self.alpha)
-            * (rv.value / constants.c.value)
-            * self.lensing_system.sin_i.value
-        )
+        return (3 - self.alpha) * (rv.value / constants.c.value)
 
     @property
     def meta(self):
@@ -247,7 +243,7 @@ class EllipsoidalVariationsLightcurveGenerator(FlatLightcurveGenerator):
 
     @property
     def amplification(self):
-        phases = self.lensing_system.time_to_phase(self.time_offsets * 2)
+        phases = self.lensing_system.time_to_phase(self.time_offsets)
         mass_ratio = _quantity_value(self.lensing_system.Macc, units.kg) / _quantity_value(
             self.lensing_system.Mcomp, units.kg
         )
@@ -259,7 +255,7 @@ class EllipsoidalVariationsLightcurveGenerator(FlatLightcurveGenerator):
             * mass_ratio
             * radius_ratio**3
             * _quantity_value(self.lensing_system.sin_i) ** 2
-            * jnp.cos(_quantity_value(phases, units.rad))
+            * jnp.cos(2 * _quantity_value(phases, units.rad))
             * -1
         )
 
