@@ -599,14 +599,43 @@ class RVGenerator(GeneratorBase):
     def phases(self):
         return self.lensing_system.time_to_phase(self.time_offsets)
 
+    def _source_polar_velocity_components(self, phases):
+        phase_values = _quantity_value(phases, units.rad)
+        eccentricity = _quantity_value(self.lensing_system.e)
+        periapsis_phase = _quantity_value(
+            self.lensing_system.periapsis_phase, units.rad
+        )
+        true_anomaly = phase_values - periapsis_phase
+
+        semi_major_axis = _quantity_value(self.lensing_system.a, units.m)
+        lens_mass = _quantity_value(self.lensing_system.Macc, units.kg)
+        total_mass = _quantity_value(self.lensing_system.Mtot, units.kg)
+        mu = constants.G.value * total_mass
+        angular_momentum = jnp.sqrt(
+            mu * semi_major_axis * (1 - eccentricity**2)
+        )
+        source_scale = lens_mass / total_mass
+
+        velocity_scale = source_scale * (mu / angular_momentum)
+        radial_velocity = velocity_scale * eccentricity * jnp.sin(true_anomaly)
+        tangential_velocity = velocity_scale * (
+            1 + eccentricity * jnp.cos(true_anomaly)
+        )
+        return radial_velocity, tangential_velocity, velocity_scale
+
     @property
     def rv(self):
         phases = self.phases()
+        phase_values = _quantity_value(phases, units.rad)
+        (
+            radial_velocity,
+            tangential_velocity,
+            _,
+        ) = self._source_polar_velocity_components(phases)
         rv = (
-            _quantity_value(self.lensing_system.v_comp(phases), self.units)
-            * jnp.sin(_quantity_value(phases, units.rad))
-            * _quantity_value(self.lensing_system.sin_i)
-        )
+            tangential_velocity * jnp.sin(phase_values)
+            - radial_velocity * jnp.cos(phase_values)
+        ) * _quantity_value(self.lensing_system.sin_i)
         return unxt.Quantity(rv, self.units)
 
     @property
@@ -615,8 +644,11 @@ class RVGenerator(GeneratorBase):
         Derivative of radial velocity.
         """
         phases = self.phases()
-        return (
-            self.lensing_system.v_comp(phases)
-            * numpy.cos(phases)
-            * self.lensing_system.sin_i
+        phase_values = _quantity_value(phases, units.rad)
+        _, _, velocity_scale = self._source_polar_velocity_components(phases)
+        return unxt.Quantity(
+            velocity_scale
+            * jnp.cos(phase_values)
+            * _quantity_value(self.lensing_system.sin_i),
+            self.units,
         )

@@ -349,11 +349,39 @@ class SelfLensingSystem(object):
     @units.quantity_input
     def time_to_phase(self, time: units.day):
         """
-        Convert time offsets to angular orbital phases.
+        Convert time offsets to true orbital longitudes relative to peak lensing.
         """
         time = _quantity_value(time, units.day)
         porb = _quantity_value(self.porb, units.day)
-        return Quantity((((time % porb) / porb) * 2 * numpy.pi), units.rad)
+        e = _quantity_value(self.e)
+        periapsis_phase = _quantity_value(self.periapsis_phase, units.rad)
+
+        true_anomaly_at_peak = -periapsis_phase
+        eccentric_anomaly_at_peak = 2 * jnp.arctan2(
+            jnp.sqrt(1 - e) * jnp.sin(true_anomaly_at_peak / 2),
+            jnp.sqrt(1 + e) * jnp.cos(true_anomaly_at_peak / 2),
+        )
+        mean_anomaly_at_peak = eccentric_anomaly_at_peak - e * jnp.sin(
+            eccentric_anomaly_at_peak
+        )
+        mean_anomaly = jnp.mod(
+            mean_anomaly_at_peak + (time / porb) * 2 * jnp.pi,
+            2 * jnp.pi,
+        )
+
+        eccentric_anomaly = mean_anomaly
+        for _ in range(10):
+            eccentric_anomaly = eccentric_anomaly - (
+                eccentric_anomaly - e * jnp.sin(eccentric_anomaly) - mean_anomaly
+            ) / (1 - e * jnp.cos(eccentric_anomaly))
+
+        true_anomaly = 2 * jnp.arctan2(
+            jnp.sqrt(1 + e) * jnp.sin(eccentric_anomaly / 2),
+            jnp.sqrt(1 - e) * jnp.cos(eccentric_anomaly / 2),
+        )
+        phase = jnp.mod(true_anomaly + periapsis_phase, 2 * jnp.pi)
+        phase = jnp.where(jnp.abs(phase - 2 * jnp.pi) < 1e-12, 0.0, phase)
+        return Quantity(phase, units.rad)
 
     @units.quantity_input
     def v(self, m: units.kg, phase: units.rad) -> units.m / units.s:
