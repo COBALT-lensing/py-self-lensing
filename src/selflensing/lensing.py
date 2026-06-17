@@ -1,18 +1,28 @@
 import numpy
 import rustlens
+import jax
 
 from jax import numpy as jnp
 from scipy import special
 
 
 RADIUS_LIM = 1e-5
+ANNULUS_WIDTH = 1e-4
+LD_COEFF = 0.6
+LD_LINEAR_INT = 2.5132741228717936
 ELLIPTIC_QUADRATURE_POINTS = 96
+BRIGHTNESS_QUADRATURE_POINTS = 96
 
 _LEGENDRE_NODES, _LEGENDRE_WEIGHTS = special.roots_legendre(
     ELLIPTIC_QUADRATURE_POINTS
 )
 _THETA = numpy.asarray(0.25 * numpy.pi * (_LEGENDRE_NODES + 1.0))
 _THETA_WEIGHTS = numpy.asarray(0.25 * numpy.pi * _LEGENDRE_WEIGHTS)
+_BRIGHTNESS_NODES, _BRIGHTNESS_WEIGHTS = special.roots_legendre(
+    BRIGHTNESS_QUADRATURE_POINTS
+)
+_BRIGHTNESS_R = numpy.asarray(0.5 * (_BRIGHTNESS_NODES + 1.0))
+_BRIGHTNESS_WEIGHTS = numpy.asarray(0.5 * _BRIGHTNESS_WEIGHTS)
 
 
 def wm_callback(
@@ -54,6 +64,13 @@ def _theta_grid(dtype):
     return jnp.asarray(_THETA, dtype=dtype), jnp.asarray(_THETA_WEIGHTS, dtype=dtype)
 
 
+def _brightness_grid(dtype):
+    return (
+        jnp.asarray(_BRIGHTNESS_R, dtype=dtype),
+        jnp.asarray(_BRIGHTNESS_WEIGHTS, dtype=dtype),
+    )
+
+
 def _complete_ellipk(m):
     theta, weights = _theta_grid(m.dtype)
     sin2 = jnp.sin(theta) ** 2
@@ -79,20 +96,19 @@ def _complete_ellippi(n, m):
     )
 
 
-def witt_mao_magnification_jax(l, re, rstar):
-    """JAX-compatible approximation of RustLens' Witt-Mao magnification."""
-    l = jnp.asarray(l)
-    dtype = l.dtype
-    re = jnp.asarray(re, dtype=dtype)
-    rstar = jnp.asarray(rstar, dtype=dtype)
+def _point_source_magnification(u):
+    safe_u = jnp.where(u == 0.0, jnp.finfo(u.dtype).tiny, u)
+    return (safe_u**2 + 2.0) / (safe_u * jnp.sqrt(safe_u**2 + 4.0))
 
-    rstar_scaled = rstar / re
+
+def _witt_mao_magnification_scaled(l_scaled, rstar_scaled):
     rstar_scaled2 = rstar_scaled**2
-    l_scaled = l * rstar_scaled
+    point_value = _point_source_magnification(l_scaled)
 
     l_r_diff = l_scaled - rstar_scaled
     l_r_sum = l_scaled + rstar_scaled
-    edge_case = jnp.abs(l_r_diff) < RADIUS_LIM
+    edge_lim = jnp.maximum(RADIUS_LIM, 10.0 * ANNULUS_WIDTH * jnp.abs(rstar_scaled))
+    edge_case = jnp.abs(l_r_diff) < edge_lim
 
     edge_value = (
         (2.0 / rstar_scaled)
@@ -106,7 +122,7 @@ def witt_mao_magnification_jax(l, re, rstar):
     kernel1 = l_r_diff**2
     kernel2 = jnp.sqrt(4.0 + kernel1)
 
-    safe_l_r_sum = jnp.where(l_r_sum == 0.0, jnp.finfo(dtype).eps, l_r_sum)
+    safe_l_r_sum = jnp.where(l_r_sum == 0.0, jnp.finfo(l_scaled.dtype).eps, l_r_sum)
     elliptic_n = 4.0 * rstar_scaled * l_scaled / (safe_l_r_sum**2)
     elliptic_k = jnp.sqrt(4.0 * elliptic_n) / kernel2
     elliptic_m = elliptic_k**2
@@ -130,6 +146,21 @@ def witt_mao_magnification_jax(l, re, rstar):
         + _complete_ellippi(elliptic_n, elliptic_m) * third_term
     ) / jnp.pi
 
+    finite_source_value = jnp.where(edge_case, edge_value, formula_value)
+    return jnp.where(rstar_scaled <= 0.0, point_value, finite_source_value)
+
+
+def witt_mao_magnification_jax(l, re, rstar):
+    """JAX-compatible approximation of RustLens' Witt-Mao magnification."""
+    l = jnp.asarray(l)
+    dtype = l.dtype
+    re = jnp.asarray(re, dtype=dtype)
+    rstar = jnp.asarray(rstar, dtype=dtype)
+
+    rstar_scaled = rstar / re
+    l_scaled = l * rstar_scaled
+    formula_value = _witt_mao_magnification_scaled(l_scaled, rstar_scaled)
+
     valid = (
         jnp.isfinite(l)
         & jnp.isfinite(re)
@@ -137,9 +168,37 @@ def witt_mao_magnification_jax(l, re, rstar):
         & (re > 0.0)
         & (rstar > 0.0)
     )
-    return jnp.where(valid, jnp.where(edge_case, edge_value, formula_value), jnp.nan)
+    return jnp.where(valid, formula_value, jnp.nan)
 
 
 def integrated_witt_mao_magnification_jax(l, re, rstar):
     """JAX-native integrated Witt-Mao magnification."""
-    return witt_mao_magnification_jax(l, re, rstar)
+    l = jnp.asarray(l)
+    dtype = l.dtype
+    re = jnp.asarray(re, dtype=dtype)
+    rstar = jnp.asarray(rstar, dtype=dtype)
+
+    rstar_scaled = rstar / re
+    l_scaled = l * rstar_scaled
+    mu, weights = _brightness_grid(dtype)
+    r = jnp.sqrt(1.0 - mu**2)
+
+    def integrate_one(l_scaled_i):
+        cumulative_flux = (
+            r**2 * _witt_mao_magnification_scaled(l_scaled_i, rstar_scaled * r)
+        )
+        full_flux = _witt_mao_magnification_scaled(l_scaled_i, rstar_scaled)
+        mag_int = jnp.pi * (
+            (1.0 - LD_COEFF) * full_flux
+            + LD_COEFF * jnp.sum(weights * cumulative_flux)
+        )
+        return mag_int / LD_LINEAR_INT
+
+    valid = (
+        jnp.isfinite(l)
+        & jnp.isfinite(re)
+        & jnp.isfinite(rstar)
+        & (re > 0.0)
+        & (rstar > 0.0)
+    )
+    return jnp.where(valid, jax.vmap(integrate_one)(l_scaled), jnp.nan)
