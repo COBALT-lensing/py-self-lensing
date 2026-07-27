@@ -235,7 +235,7 @@ class EllipsoidalVariationsLightcurveGenerator(FlatLightcurveGenerator):
     # One day we could use the models from here:
     # https://www.aanda.org/articles/aa/full_html/2017/04/aa29705-16/aa29705-16.html
     # But these will do for now.
-    g = 0.4  # Gravity darkening co-efficient
+    g = 0.32  # Gravity darkening co-efficient derived from Lucy 1967 https://ui.adsabs.harvard.edu/abs/1967ZA.....65...89L/abstract
     gamma = 0.6  # Limb darkening co-efficient
 
     def __str__(self):
