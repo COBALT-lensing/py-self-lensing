@@ -110,6 +110,52 @@ pyplot.scatter(rvg.times.jd, rvg.rv)
 
 ![alt text](https://github.com/COBALT-lensing/py-self-lensing/blob/main/images/rv.png?raw=true)
 
+## Matched-filter peak searches
+
+The `selflensing.matched_filtering` module searches a light curve with a bank of
+pre-sampled templates. It subtracts the mean from the input flux, subtracts and
+unit-energy normalises each template, computes a valid cross-correlation, and
+uses `scipy.signal.find_peaks` to identify candidate matches. By default, a
+candidate must pass both a robust prominence threshold and a robust absolute
+matched-filter score threshold, which helps reject low-score continuum
+structure. Overlapping matches across the template bank are collapsed to the
+highest-scoring match by default.
+
+Templates carry their own time grid and are resampled to the median cadence of
+the light curve being searched:
+
+```python
+from selflensing.matched_filtering import (
+    MatchedFilterTemplate,
+    detect_matched_filter_peaks,
+)
+
+templates = [
+    MatchedFilterTemplate(template_flux_1, template_time_1),
+    MatchedFilterTemplate(template_flux_2, template_time_2),
+]
+
+matches = detect_matched_filter_peaks(
+    time,
+    flux,
+    templates,
+    prominence_sigma=5.0,
+    min_score_sigma=8.0,
+    dedupe_overlaps=True,
+    max_matches=10,
+)
+
+for match in matches:
+    print(match.start_time, match.peak_time, match.end_time, match.template_index)
+```
+
+Each result is a `MatchedFilterMatch` with the matching `template_index`,
+correlation score, peak prominence, and the start, peak, and end
+indices/timestamps mapped back onto the original light curve. See
+`notebooks/matched_filtering.ipynb` for a demo that simulates a TESS-like light
+curve, builds a small template bank from a range of `SelfLensingSystem`
+parameters, and plots the returned windows.
+
 ## Fitting light curves and RV
 
 Coming soon!
