@@ -158,4 +158,142 @@ parameters, and plots the returned windows.
 
 ## Fitting light curves and RV
 
-Coming soon!
+The `selflensing.fitting` package provides Bayesian MCMC fitters for recovering
+self-lensing binary parameters from light curves, radial velocities, or both.
+The default public entry point uses `emcee`, with the model likelihood evaluated
+through JAX:
+
+```python
+from astropy import units
+from selflensing.fitting import self_lensing_system_from_fit
+
+sls_fit, sampler, walker_state = self_lensing_system_from_fit(
+    Mcomp=1 * units.M_sun,
+    Rcomp=10 * units.R_sun,
+    Teff=5000 * units.K,
+    d=1 * units.kpc,
+    peak_time=peak_time,
+    lc_times=lcg.times,
+    observed_lc=observed_flux,
+    observed_lc_err=observed_flux_err,
+    rv_times=rvg.times,
+    observed_rv=observed_rv,
+    observed_rv_err=observed_rv_err,
+    nwalkers=100,
+    nsteps=5000,
+    burn=500,
+)
+```
+
+At least one of `observed_lc` or `observed_rv` must be supplied. If both are
+provided, the fitter uses the combined likelihood. Light-curve fluxes should be
+dimensionless and centred on the same convention as the generated model; pass
+`center_lc_model=True` when fitting data that has already had a unit baseline
+subtracted. RV values and errors should be Astropy quantities convertible to
+`m / s`.
+
+The fitter samples five parameters:
+
+- `a`: semi-major axis, in AU.
+- `i`: inclination, in radians.
+- `Macc`: compact-object/accretor mass, in solar masses.
+- `e`: eccentricity.
+- `periapsis_phase`: periapsis phase, in radians.
+
+The companion properties (`Mcomp`, and usually `Rcomp` and `Teff`), distance
+`d`, and the reference `peak_time` are treated as fixed inputs. The returned
+`sls_fit` is a `SelfLensingSystem` constructed from the highest log-probability
+post-burn-in sample. The `sampler` is the underlying `emcee.EnsembleSampler`,
+and `walker_state` can be passed back as `initial_walker_state` to continue or
+refine a run:
+
+```python
+sls_fit, sampler, walker_state = self_lensing_system_from_fit(
+    ...,
+    nsteps=2000,
+    burn=200,
+)
+
+sls_refined, sampler_refined, walker_state = self_lensing_system_from_fit(
+    ...,
+    initial_walker_state=walker_state,
+    nsteps=3000,
+    burn=0,
+)
+```
+
+The sampler is useful for diagnostics and posterior summaries:
+
+```python
+samples = sampler.get_chain(flat=True, discard=500)
+log_prob = sampler.get_log_prob(flat=True, discard=500)
+print(samples.shape, log_prob.max())
+```
+
+Optional period information can be included in the likelihood. Use `periods` for
+known candidate periods in days, or set `detect_periods=True` to run a
+Lomb-Scargle search on the supplied light curve and/or RV before fitting:
+
+```python
+sls_fit, sampler, walker_state = self_lensing_system_from_fit(
+    ...,
+    periods=[365.25],
+    period_min=300 * units.day,
+    period_max=450 * units.day,
+)
+```
+
+You can also pass `tau_eff` to add a Gaussian prior on the effective
+self-lensing duration. The period and duration terms are soft likelihood terms;
+they guide the sampler without replacing the photometry/RV fit.
+
+For fully JAX-native sampling, use the BlackJAX backend:
+
+```python
+from selflensing.fitting import self_lensing_system_from_fit_blackjax
+
+sls_fit, sampler, walker_state = self_lensing_system_from_fit_blackjax(
+    Mcomp=1 * units.M_sun,
+    Rcomp=10 * units.R_sun,
+    peak_time=peak_time,
+    lc_times=lcg.times,
+    observed_lc=observed_flux,
+    observed_lc_err=observed_flux_err,
+    nwalkers=128,
+    nsteps=5000,
+    burn=500,
+    random_seed=1,
+)
+```
+
+This backend keeps walker positions and log-probabilities on the selected JAX
+device during sampling. It currently requires `Rcomp`, does not support
+`gp_model` or `detect_periods=True`, and runs a fixed number of random-walk
+Metropolis-Hastings steps. Set `return_sampler=False` for large production runs
+when you only need the best-fit system and final walker state.
+
+To fit many independent systems at once, use the batched BlackJAX helper. Inputs
+must have a leading fit dimension; pad ragged light curves/RV series to a common
+length and provide boolean masks:
+
+```python
+from selflensing.fitting import self_lensing_systems_from_batched_fit_blackjax
+
+systems, samplers, walker_state = self_lensing_systems_from_batched_fit_blackjax(
+    Mcomp=Mcomp_array,
+    Rcomp=Rcomp_array,
+    peak_time=peak_time_array,
+    lc_times=padded_lc_times,
+    observed_lc=padded_flux,
+    observed_lc_err=padded_flux_err,
+    lc_mask=lc_mask,
+    nwalkers=128,
+    nsteps=3000,
+    burn=500,
+    return_sampler=False,
+)
+```
+
+All fitters respect the device controls described in the GPU section above:
+`prefer_gpu=True` by default, `device="gpu:0"` to select a specific device, and
+`prefer_gpu=False` to force CPU execution.
