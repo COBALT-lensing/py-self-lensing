@@ -127,8 +127,7 @@ def _initial_batched_walker_positions(nfits, nwalkers, initial_walker_state=None
     )
 
 
-def _default_blackjax_proposal_scale():
-    scale_fraction = 0.02
+def _default_blackjax_proposal_scale(scale_fraction=0.02):
     return jnp.asarray(
         [
             scale_fraction * (DEFAULT_LIMITS["a"][1] - DEFAULT_LIMITS["a"][0]),
@@ -216,6 +215,7 @@ def self_lensing_system_from_fit_blackjax(
     device=None,
     initial_walker_state=None,
     proposal_scale=None,
+    proposal_scale_fraction=0.02,
     random_seed=0,
     progress_chunk_size=100,
     return_sampler=True,
@@ -338,7 +338,7 @@ def self_lensing_system_from_fit_blackjax(
         return logprob_vec(position[jnp.newaxis, :])[0]
 
     if proposal_scale is None:
-        proposal_scale = _default_blackjax_proposal_scale()
+        proposal_scale = _default_blackjax_proposal_scale(proposal_scale_fraction)
     proposal_scale = jax.device_put(jax_numpy.asarray(proposal_scale), fit_device)
     random_walk = blackjax.additive_step_random_walk(
         logprob,
@@ -525,6 +525,7 @@ def self_lensing_systems_from_batched_fit_blackjax(
     device=None,
     initial_walker_state=None,
     proposal_scale=None,
+    proposal_scale_fraction=0.02,
     random_seed=0,
     progress_chunk_size=100,
     return_sampler=False,
@@ -639,7 +640,7 @@ def self_lensing_systems_from_batched_fit_blackjax(
     log_prob = logprob_vec(position)
 
     if proposal_scale is None:
-        proposal_scale = _default_blackjax_proposal_scale()
+        proposal_scale = _default_blackjax_proposal_scale(proposal_scale_fraction)
     proposal_scale = jax.device_put(jax_numpy.asarray(proposal_scale), fit_device)
 
     def one_step(carry, rng_key):
