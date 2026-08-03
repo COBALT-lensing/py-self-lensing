@@ -355,12 +355,35 @@ def self_lensing_system_from_fit_blackjax(
     def run_steps(state, rng_keys):
         return jax.lax.scan(one_step, state, rng_keys)
 
+    def one_best_step(carry, inputs):
+        state, best_position, best_log_prob = carry
+        rng_key, keep_sample = inputs
+        state, _ = one_step(state, rng_key)
+        step_best_index = jnp.argmax(state.logdensity)
+        step_best_log_prob = state.logdensity[step_best_index]
+        step_best_position = state.position[step_best_index]
+        use_step_best = keep_sample & (step_best_log_prob > best_log_prob)
+        best_log_prob = jnp.where(use_step_best, step_best_log_prob, best_log_prob)
+        best_position = jnp.where(use_step_best, step_best_position, best_position)
+        return (state, best_position, best_log_prob), None
+
+    @jax.jit
+    def run_steps_best(state, best_position, best_log_prob, rng_keys, keep_steps):
+        (state, best_position, best_log_prob), _ = jax.lax.scan(
+            one_best_step,
+            (state, best_position, best_log_prob),
+            (rng_keys, keep_steps),
+        )
+        return state, best_position, best_log_prob
+
     rng_key = jax.random.PRNGKey(random_seed)
     chain_chunks = []
     log_prob_chunks = []
     acceptance_chunks = []
-    best_position = None
-    best_log_prob = -jnp.inf
+    best_position = jnp.zeros_like(state.position[0])
+    best_log_prob = jnp.asarray(-jnp.inf)
+    if not return_sampler and burn >= nsteps:
+        raise ValueError("burn must be smaller than nsteps when return_sampler=False")
     remaining_steps = nsteps
     completed_steps = 0
     if progress:
@@ -378,26 +401,22 @@ def self_lensing_system_from_fit_blackjax(
             current_chunk_size = min(chunk_size, remaining_steps)
             rng_key, sample_key = jax.random.split(rng_key)
             step_keys = jax.random.split(sample_key, current_chunk_size)
-            state, (positions, log_prob, accepted) = run_steps(state, step_keys)
             if return_sampler:
+                state, (positions, log_prob, accepted) = run_steps(state, step_keys)
                 chain_chunks.append(positions)
                 log_prob_chunks.append(log_prob)
                 acceptance_chunks.append(accepted)
-            elif completed_steps + current_chunk_size > burn:
-                post_burn_start = max(0, burn - completed_steps)
-                chunk_positions = positions[post_burn_start:]
-                chunk_log_prob = log_prob[post_burn_start:]
-                flat_positions = chunk_positions.reshape((-1, chunk_positions.shape[-1]))
-                flat_log_prob = chunk_log_prob.reshape((-1,))
-                chunk_best_index = jnp.argmax(flat_log_prob)
-                chunk_best_log_prob = flat_log_prob[chunk_best_index]
-                chunk_best_position = flat_positions[chunk_best_index]
-                use_chunk_best = chunk_best_log_prob > best_log_prob
-                best_log_prob = jnp.where(use_chunk_best, chunk_best_log_prob, best_log_prob)
-                best_position = (
-                    chunk_best_position
-                    if best_position is None
-                    else jnp.where(use_chunk_best, chunk_best_position, best_position)
+            else:
+                keep_steps = (
+                    jnp.arange(completed_steps, completed_steps + current_chunk_size)
+                    >= burn
+                )
+                state, best_position, best_log_prob = run_steps_best(
+                    state,
+                    best_position,
+                    best_log_prob,
+                    step_keys,
+                    keep_steps,
                 )
             remaining_steps -= current_chunk_size
             completed_steps += current_chunk_size
@@ -423,8 +442,6 @@ def self_lensing_system_from_fit_blackjax(
             flat_samples, flat_log_prob, Rcomp, Mcomp, Teff, d
         )
     else:
-        if best_position is None:
-            raise ValueError("burn must be smaller than nsteps when return_sampler=False")
         sampler = None
         sls = _best_fit_system_from_samples(
             jax.device_get(best_position[jnp.newaxis, :]),
@@ -662,12 +679,40 @@ def self_lensing_systems_from_batched_fit_blackjax(
     def run_steps(position, log_prob, rng_keys):
         return jax.lax.scan(one_step, (position, log_prob), rng_keys)
 
+    def one_best_step(carry, inputs):
+        position, log_prob, best_position, best_log_prob = carry
+        rng_key, keep_sample = inputs
+        (position, log_prob), _ = one_step((position, log_prob), rng_key)
+        best_walker_indices = jnp.argmax(log_prob, axis=1)
+        fit_indices = jnp.arange(nfits)
+        step_best_log_prob = log_prob[fit_indices, best_walker_indices]
+        step_best_position = position[fit_indices, best_walker_indices]
+        use_step_best = keep_sample & (step_best_log_prob > best_log_prob)
+        best_log_prob = jnp.where(use_step_best, step_best_log_prob, best_log_prob)
+        best_position = jnp.where(
+            use_step_best[:, None],
+            step_best_position,
+            best_position,
+        )
+        return (position, log_prob, best_position, best_log_prob), None
+
+    @jax.jit
+    def run_steps_best(position, log_prob, best_position, best_log_prob, rng_keys, keep_steps):
+        (position, log_prob, best_position, best_log_prob), _ = jax.lax.scan(
+            one_best_step,
+            (position, log_prob, best_position, best_log_prob),
+            (rng_keys, keep_steps),
+        )
+        return position, log_prob, best_position, best_log_prob
+
     rng_key = jax.random.PRNGKey(random_seed)
     chain_chunks = []
     log_prob_chunks = []
     acceptance_chunks = []
-    best_position = None
+    best_position = jnp.zeros_like(position[:, 0, :])
     best_log_prob = jnp.full((nfits,), -jnp.inf)
+    if not return_sampler and burn >= nsteps:
+        raise ValueError("burn must be smaller than nsteps when return_sampler=False")
     remaining_steps = nsteps
     completed_steps = 0
     if progress:
@@ -685,39 +730,25 @@ def self_lensing_systems_from_batched_fit_blackjax(
             current_chunk_size = min(chunk_size, remaining_steps)
             rng_key, sample_key = jax.random.split(rng_key)
             step_keys = jax.random.split(sample_key, current_chunk_size)
-            (position, log_prob), (positions, chunk_log_prob, accepted) = run_steps(
-                position, log_prob, step_keys
-            )
             if return_sampler:
+                (position, log_prob), (positions, chunk_log_prob, accepted) = run_steps(
+                    position, log_prob, step_keys
+                )
                 chain_chunks.append(positions)
                 log_prob_chunks.append(chunk_log_prob)
                 acceptance_chunks.append(accepted)
-            if completed_steps + current_chunk_size > burn:
-                post_burn_start = max(0, burn - completed_steps)
-                chunk_positions = positions[post_burn_start:]
-                chunk_log_prob = chunk_log_prob[post_burn_start:]
-                chunk_positions_by_row = jnp.swapaxes(chunk_positions, 0, 1)
-                chunk_log_prob_by_row = jnp.swapaxes(chunk_log_prob, 0, 1)
-                flat_chunk_positions = chunk_positions_by_row.reshape(
-                    (nfits, -1, chunk_positions.shape[-1])
+            else:
+                keep_steps = (
+                    jnp.arange(completed_steps, completed_steps + current_chunk_size)
+                    >= burn
                 )
-                flat_chunk_log_prob = chunk_log_prob_by_row.reshape((nfits, -1))
-                best_indices = jnp.argmax(flat_chunk_log_prob, axis=1)
-                row_indices = jnp.arange(nfits)
-                chunk_best_log_prob = flat_chunk_log_prob[row_indices, best_indices]
-                chunk_best_position = flat_chunk_positions[row_indices, best_indices]
-                use_chunk_best = chunk_best_log_prob > best_log_prob
-                best_log_prob = jnp.where(
-                    use_chunk_best, chunk_best_log_prob, best_log_prob
-                )
-                best_position = (
-                    chunk_best_position
-                    if best_position is None
-                    else jnp.where(
-                        use_chunk_best[:, None],
-                        chunk_best_position,
-                        best_position,
-                    )
+                position, log_prob, best_position, best_log_prob = run_steps_best(
+                    position,
+                    log_prob,
+                    best_position,
+                    best_log_prob,
+                    step_keys,
+                    keep_steps,
                 )
             remaining_steps -= current_chunk_size
             completed_steps += current_chunk_size
@@ -726,9 +757,6 @@ def self_lensing_systems_from_batched_fit_blackjax(
     finally:
         if progress_iter is not None:
             progress_iter.close()
-
-    if best_position is None:
-        raise ValueError("burn must be smaller than nsteps when return_sampler=False")
 
     final_walker_state = (
         BlackJAXFitState(coords=jax.device_get(position))
