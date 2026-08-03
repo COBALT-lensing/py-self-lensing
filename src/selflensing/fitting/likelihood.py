@@ -284,7 +284,7 @@ def combined_chi2(
 
 
 def chi2(obs, obs_err, model):
-    return -jnp.sum((obs - model) ** 2 / obs_err**2) / len(obs)
+    return -jnp.sum((obs - model) ** 2 / obs_err**2)
 
 
 def chi2_masked(obs, obs_err, model, mask=None):
@@ -292,8 +292,7 @@ def chi2_masked(obs, obs_err, model, mask=None):
         return chi2(obs, obs_err, model)
     mask = jnp.asarray(mask, dtype=bool)
     weight = mask.astype(float)
-    n = jnp.maximum(jnp.sum(weight), 1.0)
-    return -jnp.sum(weight * (obs - model) ** 2 / obs_err**2) / n
+    return -jnp.sum(weight * (obs - model) ** 2 / obs_err**2)
 
 
 
