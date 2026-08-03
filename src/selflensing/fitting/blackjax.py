@@ -763,6 +763,19 @@ def self_lensing_systems_from_batched_fit_blackjax(
         if return_walker_state
         else None
     )
+    if return_sampler:
+        chain_all = jnp.concatenate(chain_chunks, axis=0)
+        log_prob_all = jnp.concatenate(log_prob_chunks, axis=0)
+        flat_positions = jnp.transpose(chain_all[burn:], (1, 0, 2, 3)).reshape(
+            (nfits, -1, chain_all.shape[-1])
+        )
+        flat_log_prob = jnp.transpose(log_prob_all[burn:], (1, 0, 2)).reshape(
+            (nfits, -1)
+        )
+        best_indices = jnp.argmax(flat_log_prob, axis=1)
+        fit_indices = jnp.arange(nfits)
+        best_position = flat_positions[fit_indices, best_indices]
+        best_log_prob = flat_log_prob[fit_indices, best_indices]
     systems = _best_fit_systems_from_positions(
         jax.device_get(best_position),
         Rcomp,
@@ -771,8 +784,8 @@ def self_lensing_systems_from_batched_fit_blackjax(
         d,
     )
     if return_sampler:
-        chain = jax.device_get(jnp.concatenate(chain_chunks, axis=0))
-        log_prob = jax.device_get(jnp.concatenate(log_prob_chunks, axis=0))
+        chain = jax.device_get(chain_all)
+        log_prob = jax.device_get(log_prob_all)
         acceptance = jax.device_get(jnp.concatenate(acceptance_chunks, axis=0))
         samplers = [
             BlackJAXSamplerResult(
