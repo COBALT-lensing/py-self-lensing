@@ -52,6 +52,11 @@ class BlackJAXSamplerResult:
         return log_prob
 
 
+DEFAULT_PROPOSAL_REFERENCE_OBSERVATIONS = 13.0
+DEFAULT_POSTERIOR_SUMMARY_TOP_K = 256
+PHASE_INDEX = 4
+
+
 def _initial_walker_positions(nwalkers, initial_walker_state=None):
     ndim = 5
     if initial_walker_state is not None:
@@ -145,6 +150,133 @@ def _default_blackjax_proposal_scale(scale_fraction=0.02):
     )
 
 
+def _count_observations(observed, mask=None):
+    if observed is None:
+        return None
+    if mask is None:
+        return numpy.asarray(observed).shape[-1]
+    return numpy.sum(numpy.asarray(mask, dtype=bool), axis=-1)
+
+
+def _proposal_observation_counts(observed_rv, rv_mask, observed_lc, lc_mask):
+    rv_count = _count_observations(observed_rv, rv_mask)
+    if rv_count is not None:
+        return rv_count
+    lc_count = _count_observations(observed_lc, lc_mask)
+    if lc_count is not None:
+        return lc_count
+    return 1
+
+
+def _scaled_proposal_scale(
+    proposal_scale,
+    observed_rv,
+    rv_mask,
+    observed_lc,
+    lc_mask,
+    reference_observations=DEFAULT_PROPOSAL_REFERENCE_OBSERVATIONS,
+):
+    counts = numpy.asarray(
+        _proposal_observation_counts(observed_rv, rv_mask, observed_lc, lc_mask),
+        dtype=float,
+    )
+    counts = numpy.maximum(counts, 1.0)
+    if reference_observations is None:
+        finite_counts = counts[numpy.isfinite(counts)]
+        reference_observations = numpy.min(finite_counts) if finite_counts.size else 1.0
+    reference_observations = max(float(reference_observations), 1.0)
+    factor = numpy.minimum(1.0, numpy.sqrt(reference_observations / counts))
+    proposal_scale = numpy.asarray(proposal_scale, dtype=float)
+    if factor.ndim == 0:
+        return proposal_scale * float(factor)
+    return factor[:, None, None] * proposal_scale[None, None, :]
+
+
+def _posterior_summary_from_flat_samples(flat_samples, flat_log_prob, fallback_position):
+    finite = jnp.isfinite(flat_log_prob)
+    count = jnp.sum(finite)
+    weights = finite.astype(float)
+    safe_count = jnp.maximum(count, 1)
+    regular_sum = jnp.sum(flat_samples * weights[:, None], axis=0)
+    summary = regular_sum / safe_count
+    phase = jnp.mod(
+        jnp.arctan2(
+            jnp.sum(jnp.sin(flat_samples[:, PHASE_INDEX]) * weights),
+            jnp.sum(jnp.cos(flat_samples[:, PHASE_INDEX]) * weights),
+        ),
+        2 * jnp.pi,
+    )
+    summary = summary.at[PHASE_INDEX].set(phase)
+    return jnp.where(count > 0, summary, fallback_position)
+
+
+def _posterior_summaries_from_flat_samples(flat_positions, flat_log_prob, fallback_position):
+    finite = jnp.isfinite(flat_log_prob)
+    counts = jnp.sum(finite, axis=1)
+    weights = finite.astype(float)
+    safe_counts = jnp.maximum(counts, 1)
+    regular_sum = jnp.sum(flat_positions * weights[:, :, None], axis=1)
+    summaries = regular_sum / safe_counts[:, None]
+    phases = jnp.mod(
+        jnp.arctan2(
+            jnp.sum(jnp.sin(flat_positions[:, :, PHASE_INDEX]) * weights, axis=1),
+            jnp.sum(jnp.cos(flat_positions[:, :, PHASE_INDEX]) * weights, axis=1),
+        ),
+        2 * jnp.pi,
+    )
+    summaries = summaries.at[:, PHASE_INDEX].set(phases)
+    return jnp.where(counts[:, None] > 0, summaries, fallback_position)
+
+
+def _update_top_posterior_samples(
+    top_positions,
+    top_log_prob,
+    positions,
+    log_prob,
+    keep_steps,
+):
+    flat_positions = positions.reshape((-1, positions.shape[-1]))
+    flat_log_prob = jnp.where(
+        keep_steps[:, None],
+        log_prob,
+        -jnp.inf,
+    ).reshape((-1,))
+    combined_positions = jnp.concatenate((top_positions, flat_positions), axis=0)
+    combined_log_prob = jnp.concatenate((top_log_prob, flat_log_prob), axis=0)
+    next_log_prob, next_indices = jax.lax.top_k(combined_log_prob, top_log_prob.shape[0])
+    next_positions = combined_positions[next_indices]
+    return next_positions, next_log_prob
+
+
+def _update_batched_top_posterior_samples(
+    top_positions,
+    top_log_prob,
+    positions,
+    log_prob,
+    keep_steps,
+):
+    flat_positions = jnp.transpose(positions, (1, 0, 2, 3)).reshape(
+        (top_positions.shape[0], -1, positions.shape[-1])
+    )
+    flat_log_prob = jnp.where(
+        keep_steps[None, :, None],
+        jnp.transpose(log_prob, (1, 0, 2)),
+        -jnp.inf,
+    ).reshape((top_positions.shape[0], -1))
+    combined_positions = jnp.concatenate((top_positions, flat_positions), axis=1)
+    combined_log_prob = jnp.concatenate((top_log_prob, flat_log_prob), axis=1)
+    next_log_prob, next_indices = jax.lax.top_k(
+        combined_log_prob,
+        top_log_prob.shape[1],
+    )
+    next_positions = jnp.take_along_axis(
+        combined_positions,
+        next_indices[:, :, None],
+        axis=1,
+    )
+    return next_positions, next_log_prob
+
+
 def _best_fit_system_from_samples(flat_samples, flat_log_prob, Rcomp, Mcomp, Teff, d):
     res = flat_samples[jnp.argmax(flat_log_prob)]
     out_a, out_i, out_Macc, out_e, out_periapsis_phase = res
@@ -216,8 +348,10 @@ def self_lensing_system_from_fit_blackjax(
     initial_walker_state=None,
     proposal_scale=None,
     proposal_scale_fraction=0.02,
+    proposal_reference_observations=DEFAULT_PROPOSAL_REFERENCE_OBSERVATIONS,
     random_seed=0,
     progress_chunk_size=100,
+    posterior_summary_top_k=DEFAULT_POSTERIOR_SUMMARY_TOP_K,
     return_sampler=True,
     return_walker_state=True,
 ):
@@ -242,8 +376,8 @@ def self_lensing_system_from_fit_blackjax(
     - This uses independent random-walk Metropolis-Hastings chains. It is the
       smallest safe move away from emcee, not a tuned HMC/NUTS implementation.
     - Set return_sampler=False for production fits that do not need chain
-      diagnostics. In that mode the best sample is tracked on device and the
-      full chain is not copied back to host memory.
+      diagnostics. In that mode a small high-posterior sample reservoir is
+      tracked on device and the full chain is not copied back to host memory.
     - Set return_walker_state=False when the caller does not need to seed a
       later fit from the final walker positions. This avoids copying the final
       walker coordinates back from the accelerator.
@@ -339,6 +473,14 @@ def self_lensing_system_from_fit_blackjax(
 
     if proposal_scale is None:
         proposal_scale = _default_blackjax_proposal_scale(proposal_scale_fraction)
+    proposal_scale = _scaled_proposal_scale(
+        proposal_scale,
+        observed_rv.value if observed_rv is not None else None,
+        None,
+        observed_lc.value if hasattr(observed_lc, "value") else observed_lc,
+        None,
+        proposal_reference_observations,
+    )
     proposal_scale = jax.device_put(jax_numpy.asarray(proposal_scale), fit_device)
     random_walk = blackjax.additive_step_random_walk(
         logprob,
@@ -355,33 +497,15 @@ def self_lensing_system_from_fit_blackjax(
     def run_steps(state, rng_keys):
         return jax.lax.scan(one_step, state, rng_keys)
 
-    def one_best_step(carry, inputs):
-        state, best_position, best_log_prob = carry
-        rng_key, keep_sample = inputs
-        state, _ = one_step(state, rng_key)
-        step_best_index = jnp.argmax(state.logdensity)
-        step_best_log_prob = state.logdensity[step_best_index]
-        step_best_position = state.position[step_best_index]
-        use_step_best = keep_sample & (step_best_log_prob > best_log_prob)
-        best_log_prob = jnp.where(use_step_best, step_best_log_prob, best_log_prob)
-        best_position = jnp.where(use_step_best, step_best_position, best_position)
-        return (state, best_position, best_log_prob), None
-
-    @jax.jit
-    def run_steps_best(state, best_position, best_log_prob, rng_keys, keep_steps):
-        (state, best_position, best_log_prob), _ = jax.lax.scan(
-            one_best_step,
-            (state, best_position, best_log_prob),
-            (rng_keys, keep_steps),
-        )
-        return state, best_position, best_log_prob
-
     rng_key = jax.random.PRNGKey(random_seed)
     chain_chunks = []
     log_prob_chunks = []
     acceptance_chunks = []
-    best_position = jnp.zeros_like(state.position[0])
-    best_log_prob = jnp.asarray(-jnp.inf)
+    posterior_summary_top_k = int(posterior_summary_top_k)
+    if posterior_summary_top_k < 1:
+        raise ValueError("posterior_summary_top_k must be at least 1")
+    top_positions = jnp.zeros((posterior_summary_top_k, state.position.shape[-1]))
+    top_log_prob = jnp.full((posterior_summary_top_k,), -jnp.inf)
     if not return_sampler and burn >= nsteps:
         raise ValueError("burn must be smaller than nsteps when return_sampler=False")
     remaining_steps = nsteps
@@ -407,15 +531,16 @@ def self_lensing_system_from_fit_blackjax(
                 log_prob_chunks.append(log_prob)
                 acceptance_chunks.append(accepted)
             else:
+                state, (positions, log_prob, _accepted) = run_steps(state, step_keys)
                 keep_steps = (
                     jnp.arange(completed_steps, completed_steps + current_chunk_size)
                     >= burn
                 )
-                state, best_position, best_log_prob = run_steps_best(
-                    state,
-                    best_position,
-                    best_log_prob,
-                    step_keys,
+                top_positions, top_log_prob = _update_top_posterior_samples(
+                    top_positions,
+                    top_log_prob,
+                    positions,
+                    log_prob,
                     keep_steps,
                 )
             remaining_steps -= current_chunk_size
@@ -436,21 +561,31 @@ def self_lensing_system_from_fit_blackjax(
         log_prob = jax.device_get(jnp.concatenate(log_prob_chunks, axis=0))
         acceptance = jax.device_get(jnp.concatenate(acceptance_chunks, axis=0))
         sampler = BlackJAXSamplerResult(chain, log_prob, acceptance=acceptance)
-        flat_samples = sampler.get_chain(flat=True, discard=burn)
-        flat_log_prob = sampler.get_log_prob(flat=True, discard=burn)
-        sls = _best_fit_system_from_samples(
-            flat_samples, flat_log_prob, Rcomp, Mcomp, Teff, d
+        flat_samples = jnp.asarray(sampler.get_chain(flat=True, discard=burn))
+        flat_log_prob = jnp.asarray(sampler.get_log_prob(flat=True, discard=burn))
+        summary_top_k = min(posterior_summary_top_k, flat_log_prob.shape[0])
+        top_log_prob, top_indices = jax.lax.top_k(flat_log_prob, summary_top_k)
+        top_positions = flat_samples[top_indices]
+        summary_position = _posterior_summary_from_flat_samples(
+            top_positions,
+            top_log_prob,
+            top_positions[0],
         )
     else:
         sampler = None
-        sls = _best_fit_system_from_samples(
-            jax.device_get(best_position[jnp.newaxis, :]),
-            jax.device_get(best_log_prob[jnp.newaxis]),
-            Rcomp,
-            Mcomp,
-            Teff,
-            d,
+        summary_position = _posterior_summary_from_flat_samples(
+            top_positions,
+            top_log_prob,
+            top_positions[0],
         )
+    sls = _best_fit_system_from_samples(
+        jax.device_get(summary_position[jnp.newaxis, :]),
+        jax.device_get(jnp.asarray([0.0])),
+        Rcomp,
+        Mcomp,
+        Teff,
+        d,
+    )
     return sls, sampler, final_walker_state
 
 
@@ -543,8 +678,10 @@ def self_lensing_systems_from_batched_fit_blackjax(
     initial_walker_state=None,
     proposal_scale=None,
     proposal_scale_fraction=0.02,
+    proposal_reference_observations=None,
     random_seed=0,
     progress_chunk_size=100,
+    posterior_summary_top_k=DEFAULT_POSTERIOR_SUMMARY_TOP_K,
     return_sampler=False,
     return_walker_state=False,
 ):
@@ -552,10 +689,10 @@ def self_lensing_systems_from_batched_fit_blackjax(
 
     Observation arrays must have a leading fit dimension. Ragged RV/LC series
     should be padded to a common length and accompanied by boolean masks. The
-    sampler tracks the best post-burn sample for each fit on device and copies
-    the batched best positions back once at the end. When ``return_sampler`` is
-    enabled, the full chain is copied back to host memory and returned as one
-    ``BlackJAXSamplerResult`` per fit.
+    sampler tracks a small high-posterior post-burn sample reservoir for each
+    fit on device and copies posterior summaries back once at the end. When
+    ``return_sampler`` is enabled, the full chain is copied back to host memory
+    and returned as one ``BlackJAXSamplerResult`` per fit.
     """
     if observed_rv is None and observed_lc is None:
         raise RuntimeError("You must provide at least one of observed_rv, observed_lc")
@@ -658,6 +795,14 @@ def self_lensing_systems_from_batched_fit_blackjax(
 
     if proposal_scale is None:
         proposal_scale = _default_blackjax_proposal_scale(proposal_scale_fraction)
+    proposal_scale = _scaled_proposal_scale(
+        proposal_scale,
+        observed_rv,
+        rv_mask,
+        observed_lc,
+        lc_mask,
+        proposal_reference_observations,
+    )
     proposal_scale = jax.device_put(jax_numpy.asarray(proposal_scale), fit_device)
 
     def one_step(carry, rng_key):
@@ -679,38 +824,15 @@ def self_lensing_systems_from_batched_fit_blackjax(
     def run_steps(position, log_prob, rng_keys):
         return jax.lax.scan(one_step, (position, log_prob), rng_keys)
 
-    def one_best_step(carry, inputs):
-        position, log_prob, best_position, best_log_prob = carry
-        rng_key, keep_sample = inputs
-        (position, log_prob), _ = one_step((position, log_prob), rng_key)
-        best_walker_indices = jnp.argmax(log_prob, axis=1)
-        fit_indices = jnp.arange(nfits)
-        step_best_log_prob = log_prob[fit_indices, best_walker_indices]
-        step_best_position = position[fit_indices, best_walker_indices]
-        use_step_best = keep_sample & (step_best_log_prob > best_log_prob)
-        best_log_prob = jnp.where(use_step_best, step_best_log_prob, best_log_prob)
-        best_position = jnp.where(
-            use_step_best[:, None],
-            step_best_position,
-            best_position,
-        )
-        return (position, log_prob, best_position, best_log_prob), None
-
-    @jax.jit
-    def run_steps_best(position, log_prob, best_position, best_log_prob, rng_keys, keep_steps):
-        (position, log_prob, best_position, best_log_prob), _ = jax.lax.scan(
-            one_best_step,
-            (position, log_prob, best_position, best_log_prob),
-            (rng_keys, keep_steps),
-        )
-        return position, log_prob, best_position, best_log_prob
-
     rng_key = jax.random.PRNGKey(random_seed)
     chain_chunks = []
     log_prob_chunks = []
     acceptance_chunks = []
-    best_position = jnp.zeros_like(position[:, 0, :])
-    best_log_prob = jnp.full((nfits,), -jnp.inf)
+    posterior_summary_top_k = int(posterior_summary_top_k)
+    if posterior_summary_top_k < 1:
+        raise ValueError("posterior_summary_top_k must be at least 1")
+    top_positions = jnp.zeros((nfits, posterior_summary_top_k, position.shape[-1]))
+    top_log_prob = jnp.full((nfits, posterior_summary_top_k), -jnp.inf)
     if not return_sampler and burn >= nsteps:
         raise ValueError("burn must be smaller than nsteps when return_sampler=False")
     remaining_steps = nsteps
@@ -738,16 +860,18 @@ def self_lensing_systems_from_batched_fit_blackjax(
                 log_prob_chunks.append(chunk_log_prob)
                 acceptance_chunks.append(accepted)
             else:
+                (position, log_prob), (positions, chunk_log_prob, _accepted) = run_steps(
+                    position, log_prob, step_keys
+                )
                 keep_steps = (
                     jnp.arange(completed_steps, completed_steps + current_chunk_size)
                     >= burn
                 )
-                position, log_prob, best_position, best_log_prob = run_steps_best(
-                    position,
-                    log_prob,
-                    best_position,
-                    best_log_prob,
-                    step_keys,
+                top_positions, top_log_prob = _update_batched_top_posterior_samples(
+                    top_positions,
+                    top_log_prob,
+                    positions,
+                    chunk_log_prob,
                     keep_steps,
                 )
             remaining_steps -= current_chunk_size
@@ -772,12 +896,26 @@ def self_lensing_systems_from_batched_fit_blackjax(
         flat_log_prob = jnp.transpose(log_prob_all[burn:], (1, 0, 2)).reshape(
             (nfits, -1)
         )
-        best_indices = jnp.argmax(flat_log_prob, axis=1)
-        fit_indices = jnp.arange(nfits)
-        best_position = flat_positions[fit_indices, best_indices]
-        best_log_prob = flat_log_prob[fit_indices, best_indices]
+        summary_top_k = min(posterior_summary_top_k, flat_log_prob.shape[1])
+        top_log_prob, top_indices = jax.lax.top_k(flat_log_prob, summary_top_k)
+        top_positions = jnp.take_along_axis(
+            flat_positions,
+            top_indices[:, :, None],
+            axis=1,
+        )
+        summary_position = _posterior_summaries_from_flat_samples(
+            top_positions,
+            top_log_prob,
+            top_positions[:, 0, :],
+        )
+    else:
+        summary_position = _posterior_summaries_from_flat_samples(
+            top_positions,
+            top_log_prob,
+            top_positions[:, 0, :],
+        )
     systems = _best_fit_systems_from_positions(
-        jax.device_get(best_position),
+        jax.device_get(summary_position),
         Rcomp,
         Mcomp,
         Teff,
