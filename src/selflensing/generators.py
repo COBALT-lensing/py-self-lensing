@@ -9,10 +9,48 @@ import unxt
 import jax
 from jax import numpy as jnp
 
-from .lensing import integrated_witt_mao_magnification_jax, wm_callback
+from .lightcurves import (
+    doppler_boosting_alpha,
+    doppler_boosting_amplification,
+    ellipsoidal_variations_amplification,
+    light_curve_amplification,
+    radial_velocity_m_per_s,
+    self_lensing_amplification,
+)
+from .lensing import wm_callback
 from .models import SelfLensingSystem, _quantity_value
 
 # from src.selflensing.gp.LensingGP import _run_nucs_safe
+
+
+JAX_LENSING_METHODS = {"IntegratedWittMaoJax", "JaxWittMao"}
+
+
+def _time_values_days(times):
+    if hasattr(times, "jd"):
+        times = times.jd
+    return jnp.asarray(times)
+
+
+def _peak_time_value_days(peak_time):
+    if hasattr(peak_time, "jd"):
+        peak_time = peak_time.jd
+    return jnp.asarray(peak_time)
+
+
+def _light_curve_params_from_system(lensing_system):
+    return jnp.asarray(
+        [
+            _quantity_value(lensing_system.a, units.au),
+            _quantity_value(lensing_system.i, units.rad),
+            _quantity_value(lensing_system.Macc, units.M_sun),
+            _quantity_value(lensing_system.Mcomp, units.M_sun),
+            _quantity_value(lensing_system.Rcomp, units.R_sun),
+            _quantity_value(lensing_system.Teff, units.K),
+            _quantity_value(lensing_system.e),
+            _quantity_value(lensing_system.periapsis_phase, units.rad),
+        ]
+    )
 
 
 class GeneratorBase(object):
@@ -192,21 +230,17 @@ class DopplerBoostingLightcurveGenerator(FlatLightcurveGenerator):
         Stellar-Compact Object Binary Systems for Mass Determinations’, The Astrophysical
         Journal 936, no. 1 (August 2022): 63, https://doi.org/10.3847/1538-4357/ac82b7.
         """
-        x = (
-            constants.h.value
-            * self.obs_freq.value
-            / (constants.k_B.value * self.lensing_system.Teff.value)
+        return doppler_boosting_alpha(
+            _light_curve_params_from_system(self.lensing_system)
         )
-        e_x = jnp.exp(x)
-        return (e_x * (3 - x) - 3) / (e_x - 1)
 
     @property
     def amplification(self):
-        rvg = RVGenerator(
-            self.lensing_system, times=self.times, peak_time=self.peak_time
+        return doppler_boosting_amplification(
+            _time_values_days(self.times),
+            _light_curve_params_from_system(self.lensing_system),
+            _peak_time_value_days(self.peak_time),
         )
-        rv = rvg.rv.to(units.m / units.s)
-        return (3 - self.alpha) * (rv.value / constants.c.value)
 
     @property
     def meta(self):
@@ -243,20 +277,10 @@ class EllipsoidalVariationsLightcurveGenerator(FlatLightcurveGenerator):
 
     @property
     def amplification(self):
-        phases = self.lensing_system.time_to_phase(self.time_offsets)
-        mass_ratio = _quantity_value(self.lensing_system.Macc, units.kg) / _quantity_value(
-            self.lensing_system.Mcomp, units.kg
-        )
-        radius_ratio = _quantity_value(self.lensing_system.Rcomp, units.m) / _quantity_value(
-            self.lensing_system.r_sep(phases), units.m
-        )
-        return (
-            self.beta
-            * mass_ratio
-            * radius_ratio**3
-            * _quantity_value(self.lensing_system.sin_i) ** 2
-            * jnp.cos(2 * _quantity_value(phases, units.rad))
-            * -1
+        return ellipsoidal_variations_amplification(
+            _time_values_days(self.times),
+            _light_curve_params_from_system(self.lensing_system),
+            _peak_time_value_days(self.peak_time),
         )
 
     @property
@@ -320,6 +344,9 @@ class SelfLensingLightcurveGenerator(FlatLightcurveGenerator):
 
     @property
     def amplification(self):
+        if self.lensing_method in JAX_LENSING_METHODS:
+            return self.integrated_witt_mao_jax_amplification
+
         rE = self.lensing_system.rE()
         super_amplification = super().amplification
 
@@ -395,10 +422,10 @@ class SelfLensingLightcurveGenerator(FlatLightcurveGenerator):
 
     @property
     def integrated_witt_mao_jax_amplification(self):
-        return integrated_witt_mao_magnification_jax(
-            self.lensing_system.time_to_b(self.time_offsets),
-            self.lensing_system.rE().to(units.m).value,
-            self.lensing_system.Rcomp.to(units.m).value,
+        return self_lensing_amplification(
+            _time_values_days(self.times),
+            _light_curve_params_from_system(self.lensing_system),
+            _peak_time_value_days(self.peak_time),
         )
 
     @property
@@ -436,6 +463,10 @@ class LightcurveGenerator(FlatLightcurveGenerator):
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
+        self.sl_enabled = sl
+        self.ev_enabled = ev
+        self.db_enabled = db
+        self.lensing_method = lensing_method
         # Baseline is deliberately not passed on to these because we don't want to apply
         # it more than once.
         if sl:
@@ -519,6 +550,16 @@ class LightcurveGenerator(FlatLightcurveGenerator):
 
     @property
     def amplification(self):
+        if self.lensing_method in JAX_LENSING_METHODS:
+            return light_curve_amplification(
+                _time_values_days(self.times),
+                _light_curve_params_from_system(self.lensing_system),
+                _peak_time_value_days(self.peak_time),
+                sl=self.sl_enabled,
+                ev=self.ev_enabled,
+                db=self.db_enabled,
+            )
+
         @jax.jit
         def f():
             return self.sl.amplification * (
@@ -625,17 +666,11 @@ class RVGenerator(GeneratorBase):
 
     @property
     def rv(self):
-        phases = self.phases()
-        phase_values = _quantity_value(phases, units.rad)
-        (
-            radial_velocity,
-            tangential_velocity,
-            _,
-        ) = self._source_polar_velocity_components(phases)
-        rv = (
-            tangential_velocity * jnp.sin(phase_values)
-            - radial_velocity * jnp.cos(phase_values)
-        ) * _quantity_value(self.lensing_system.sin_i)
+        rv = radial_velocity_m_per_s(
+            _time_values_days(self.times),
+            _light_curve_params_from_system(self.lensing_system),
+            _peak_time_value_days(self.peak_time),
+        )
         return unxt.Quantity(rv, self.units)
 
     @property

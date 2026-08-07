@@ -110,6 +110,46 @@ pyplot.scatter(rvg.times.jd, rvg.rv)
 
 ![alt text](https://github.com/COBALT-lensing/py-self-lensing/blob/main/images/rv.png?raw=true)
 
+For large batches with a shared cadence, use the JAX-native batch generator to
+avoid constructing `SelfLensingSystem` and generator objects for every row:
+
+```python
+import jax
+import jax.numpy as jnp
+from selflensing.batch import (
+    make_batched_gp_light_curve_generator,
+    make_batched_light_curve_generator,
+)
+
+device = jax.devices("gpu")[0]
+times = jnp.linspace(-0.5, 0.5, 1000)  # days relative to your time system
+generate = make_batched_light_curve_generator(times, peak_times=0.0, device=device)
+
+params = {
+    "a": jnp.array([1.0, 1.2]),                 # AU
+    "i": jnp.array([1.568, 1.567]),             # rad
+    "Macc": jnp.array([9.0, 7.0]),              # solar masses
+    "Mcomp": jnp.array([1.1, 1.4]),             # solar masses
+    "Rcomp": jnp.array([1.2, 1.5]),             # solar radii
+    "Teff": jnp.array([5800.0, 6200.0]),        # K
+    "e": jnp.array([0.2, 0.1]),
+    "periapsis_phase": jnp.array([0.4, 0.8]),   # rad
+}
+flux = generate(params)  # shape: (2, 1000), kept on the selected JAX device
+
+gp_params = jnp.array([
+    [-4.6, -3.0, -4.2, 5.0, -3.2],
+    [-4.4, -3.1, -4.1, 6.0, -3.3],
+])
+generate_noisy = make_batched_gp_light_curve_generator(
+    times,
+    gp_params,
+    kernel_type="GS",
+    device=device,
+)
+noisy_flux = generate_noisy(jax.random.key(123), flux)
+```
+
 ## Fitting light curves and RV
 
 The `selflensing.fitting` package provides Bayesian MCMC fitters for recovering

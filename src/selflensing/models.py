@@ -12,6 +12,15 @@ from .gp.PhysicalRelations import (
     effective_temperature_K,
 )
 from .gp.FluxFinderSensitivity import conv_mass_to_mag
+from .orbits import (
+    einstein_radius_m,
+    impact_parameter_source_radii,
+    orbital_period_days,
+    orbital_phase,
+    orbital_separation_m,
+    source_offset_einstein_radii,
+    source_offset_source_radii,
+)
 
 jax.config.update("jax_enable_x64", True)
 
@@ -197,10 +206,10 @@ class SelfLensingSystem(object):
         The impact parameter in units of Rcomp (source radii). b_source=1 when the lens is at
         the edge of the stellar disk.
         """
-        value = (
-            _quantity_value(self.b)
-            * _quantity_value(self.rE(), units.m)
-            / _quantity_value(self.Rcomp, units.m)
+        value = impact_parameter_source_radii(
+            _quantity_value(self.a, units.m),
+            _quantity_value(self.i, units.rad),
+            _quantity_value(self.Rcomp, units.m),
         )
         return Quantity(value, units.dimensionless_unscaled)
 
@@ -219,62 +228,63 @@ class SelfLensingSystem(object):
 
         When the lens is behind the star, assumes l is at its maximum.
         """
-        phase_value = _quantity_value(phase, units.rad)
-        phase_limit = 0.5 * numpy.pi
-        phase_upper_limit = 2 * numpy.pi - phase_limit
-        phase_value = jnp.where(
-            (phase_value > phase_limit) & (phase_value < phase_upper_limit),
-            jnp.full_like(phase_value, phase_limit),
-            phase_value,
-        )
-        value = numpy.hypot(
-            numpy.abs(
-                _quantity_value(self.r_sep(phase=Quantity(phase_value, units.rad)), units.m)
-                * numpy.sin(phase_value)
-                / _quantity_value(self.Rcomp, units.m)
-            ),
+        value = source_offset_source_radii(
+            _quantity_value(phase, units.rad),
+            _quantity_value(self.a, units.m),
+            _quantity_value(self.Rcomp, units.m),
+            _quantity_value(self.e),
+            _quantity_value(self.periapsis_phase, units.rad),
             _quantity_value(self.b_source),
         )
         return Quantity(value, units.dimensionless_unscaled)
 
     @units.quantity_input
     def phase_to_b(self, phase: units.rad):
-        return _quantity_value(self.phase_to_l(phase)) / (
-            _quantity_value(self.rE(), units.m) / _quantity_value(self.Rcomp, units.m)
+        return source_offset_einstein_radii(
+            _quantity_value(phase, units.rad),
+            _quantity_value(self.a, units.m),
+            _quantity_value(self.Rcomp, units.m),
+            _quantity_value(self.rE(), units.m),
+            _quantity_value(self.e),
+            _quantity_value(self.periapsis_phase, units.rad),
+            _quantity_value(self.b_source),
         )
 
     @property
     def porb(self) -> units.day:
-        a = self.a.to(units.m).value.astype(numpy.float64)
-        m = self.Mtot.to(units.kg).value.astype(float)
-        G = constants.G.value.astype(float)
-        return Quantity((2 * numpy.pi * ((a**3 / (G * m)) ** 0.5)), "s").to(units.day)
+        value = orbital_period_days(
+            _quantity_value(self.a, units.m),
+            _quantity_value(self.Mtot, units.kg),
+        )
+        return Quantity(value, units.day)
 
     # @units.quantity_input
     def r(self, m: units.kg, phase: units.rad) -> units.m:
         """
         The distance from the centre of mass of the object with mass 'm' at 'phase'
         """
-        r_max = (
-            _quantity_value(self.a, units.m)
-            * _quantity_value(m, units.kg)
+        value = orbital_separation_m(
+            _quantity_value(phase, units.rad),
+            _quantity_value(self.a, units.m),
+            _quantity_value(self.e),
+            _quantity_value(self.periapsis_phase, units.rad),
+        ) * (
+            _quantity_value(m, units.kg)
             / _quantity_value(self.Mtot, units.kg)
-        )
-        e = _quantity_value(self.e)
-        phase_value = _quantity_value(phase, units.rad)
-        periapsis_phase = _quantity_value(self.periapsis_phase, units.rad)
-        value = r_max * (1 - e**2) / (
-            1 + e * numpy.cos(phase_value - periapsis_phase)
         )
         return Quantity(value, units.m)
 
     @units.quantity_input
     def rE(self, phase: units.rad = 0 * units.rad) -> Quantity:
-        m = self.Macc.to(units.kg).value
-        G = constants.G.value
-        r = self.r_sep(phase).to(units.m).value
-        c2 = (constants.c**2).value
-        return Quantity(((4 * G * m * r * self.sin_i.value) / c2) ** 0.5, "m")
+        value = einstein_radius_m(
+            _quantity_value(self.a, units.m),
+            _quantity_value(self.sin_i),
+            _quantity_value(self.Macc, units.kg),
+            _quantity_value(self.e),
+            _quantity_value(self.periapsis_phase, units.rad),
+            _quantity_value(phase, units.rad),
+        )
+        return Quantity(value, units.m)
 
     @property
     def r_roche(self):
@@ -296,8 +306,11 @@ class SelfLensingSystem(object):
         """
         The separation in space between acc and comp at phase
         """
-        value = _quantity_value(self.r(self.Macc, phase), units.m) + _quantity_value(
-            self.r(self.Mcomp, phase), units.m
+        value = orbital_separation_m(
+            _quantity_value(phase, units.rad),
+            _quantity_value(self.a, units.m),
+            _quantity_value(self.e),
+            _quantity_value(self.periapsis_phase, units.rad),
         )
         return Quantity(value, units.m)
 
@@ -351,36 +364,12 @@ class SelfLensingSystem(object):
         """
         Convert time offsets to true orbital longitudes relative to peak lensing.
         """
-        time = _quantity_value(time, units.day)
-        porb = _quantity_value(self.porb, units.day)
-        e = _quantity_value(self.e)
-        periapsis_phase = _quantity_value(self.periapsis_phase, units.rad)
-
-        true_anomaly_at_peak = -periapsis_phase
-        eccentric_anomaly_at_peak = 2 * jnp.arctan2(
-            jnp.sqrt(1 - e) * jnp.sin(true_anomaly_at_peak / 2),
-            jnp.sqrt(1 + e) * jnp.cos(true_anomaly_at_peak / 2),
+        phase = orbital_phase(
+            _quantity_value(time, units.day),
+            _quantity_value(self.porb, units.day),
+            _quantity_value(self.e),
+            _quantity_value(self.periapsis_phase, units.rad),
         )
-        mean_anomaly_at_peak = eccentric_anomaly_at_peak - e * jnp.sin(
-            eccentric_anomaly_at_peak
-        )
-        mean_anomaly = jnp.mod(
-            mean_anomaly_at_peak + (time / porb) * 2 * jnp.pi,
-            2 * jnp.pi,
-        )
-
-        eccentric_anomaly = mean_anomaly
-        for _ in range(10):
-            eccentric_anomaly = eccentric_anomaly - (
-                eccentric_anomaly - e * jnp.sin(eccentric_anomaly) - mean_anomaly
-            ) / (1 - e * jnp.cos(eccentric_anomaly))
-
-        true_anomaly = 2 * jnp.arctan2(
-            jnp.sqrt(1 + e) * jnp.sin(eccentric_anomaly / 2),
-            jnp.sqrt(1 - e) * jnp.cos(eccentric_anomaly / 2),
-        )
-        phase = jnp.mod(true_anomaly + periapsis_phase, 2 * jnp.pi)
-        phase = jnp.where(jnp.abs(phase - 2 * jnp.pi) < 1e-12, 0.0, phase)
         return Quantity(phase, units.rad)
 
     @units.quantity_input
