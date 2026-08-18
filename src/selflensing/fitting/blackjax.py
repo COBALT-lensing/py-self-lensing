@@ -168,9 +168,33 @@ def _proposal_observation_counts(observed_rv, rv_mask, observed_lc, lc_mask):
     return 1
 
 
+def _rv_precision_scale(observed_rv_err, rv_mask):
+    if observed_rv_err is None:
+        return None
+    rv_err = numpy.asarray(observed_rv_err, dtype=float)
+    valid = numpy.isfinite(rv_err) & (rv_err > 0)
+    if rv_mask is not None:
+        valid &= numpy.asarray(rv_mask, dtype=bool)
+    inverse_variance = numpy.where(valid, 1.0 / numpy.square(rv_err), 0.0)
+    valid_count = numpy.sum(valid, axis=-1)
+    with numpy.errstate(invalid="ignore", divide="ignore"):
+        precision = numpy.sum(inverse_variance, axis=-1) / valid_count
+    finite_precision = precision[numpy.isfinite(precision) & (precision > 0)]
+    if finite_precision.size == 0:
+        return None
+    reference_precision = numpy.min(finite_precision)
+    scale = numpy.where(
+        numpy.isfinite(precision) & (precision > 0),
+        precision / reference_precision,
+        1.0,
+    )
+    return numpy.maximum(scale, 1.0)
+
+
 def _scaled_proposal_scale(
     proposal_scale,
     observed_rv,
+    observed_rv_err,
     rv_mask,
     observed_lc,
     lc_mask,
@@ -185,7 +209,12 @@ def _scaled_proposal_scale(
         finite_counts = counts[numpy.isfinite(counts)]
         reference_observations = numpy.min(finite_counts) if finite_counts.size else 1.0
     reference_observations = max(float(reference_observations), 1.0)
-    factor = numpy.minimum(1.0, numpy.sqrt(reference_observations / counts))
+    precision_scale = _rv_precision_scale(observed_rv_err, rv_mask)
+    effective_counts = counts if precision_scale is None else counts * precision_scale
+    factor = numpy.minimum(
+        1.0,
+        numpy.sqrt(reference_observations / effective_counts),
+    )
     proposal_scale = numpy.asarray(proposal_scale, dtype=float)
     if factor.ndim == 0:
         return proposal_scale * float(factor)
@@ -476,6 +505,7 @@ def self_lensing_system_from_fit_blackjax(
     proposal_scale = _scaled_proposal_scale(
         proposal_scale,
         observed_rv.value if observed_rv is not None else None,
+        observed_rv_err.value if observed_rv_err is not None else None,
         None,
         observed_lc.value if hasattr(observed_lc, "value") else observed_lc,
         None,
@@ -798,6 +828,7 @@ def self_lensing_systems_from_batched_fit_blackjax(
     proposal_scale = _scaled_proposal_scale(
         proposal_scale,
         observed_rv,
+        observed_rv_err,
         rv_mask,
         observed_lc,
         lc_mask,
