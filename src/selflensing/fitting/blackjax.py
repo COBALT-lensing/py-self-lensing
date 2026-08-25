@@ -24,11 +24,10 @@ class BlackJAXFitState:
 class BlackJAXSamplerResult:
     """Small emcee-like adapter for downstream diagnostics."""
 
-    def __init__(self, chain, log_prob, acceptance=None, chain_start_step=0):
+    def __init__(self, chain, log_prob, acceptance=None):
         self.chain = numpy.asarray(chain)
         self.log_prob = numpy.asarray(log_prob)
         self.acceptance = None if acceptance is None else numpy.asarray(acceptance)
-        self.chain_start_step = int(chain_start_step)
 
     @property
     def iteration(self):
@@ -41,14 +40,12 @@ class BlackJAXSamplerResult:
         return numpy.mean(self.acceptance, axis=0)
 
     def get_chain(self, flat=False, discard=0, thin=1):
-        discard = max(0, int(discard) - self.chain_start_step)
         chain = self.chain[discard::thin]
         if flat:
             return chain.reshape((-1, chain.shape[-1]))
         return chain
 
     def get_log_prob(self, flat=False, discard=0, thin=1):
-        discard = max(0, int(discard) - self.chain_start_step)
         log_prob = self.log_prob[discard::thin]
         if flat:
             return log_prob.reshape((-1,))
@@ -717,7 +714,6 @@ def self_lensing_systems_from_batched_fit_blackjax(
     posterior_summary_top_k=DEFAULT_POSTERIOR_SUMMARY_TOP_K,
     return_sampler=False,
     return_walker_state=False,
-    posterior_sample_count=None,
 ):
     """Fit many independent systems in one batched BlackJAX-style run.
 
@@ -726,10 +722,7 @@ def self_lensing_systems_from_batched_fit_blackjax(
     sampler tracks a small high-posterior post-burn sample reservoir for each
     fit on device and copies posterior summaries back once at the end. When
     ``return_sampler`` is enabled, the full chain is copied back to host memory
-    and returned as one ``BlackJAXSamplerResult`` per fit. Alternatively, set
-    ``posterior_sample_count`` with ``return_sampler=True`` to retain at most
-    that many evenly spaced post-burn walker samples per fit. The sampling
-    scan then keeps no full chain on the accelerator.
+    and returned as one ``BlackJAXSamplerResult`` per fit.
     """
     if observed_rv is None and observed_lc is None:
         raise RuntimeError("You must provide at least one of observed_rv, observed_lc")
@@ -825,16 +818,6 @@ def self_lensing_systems_from_batched_fit_blackjax(
     nwalkers = int(nwalkers)
     nsteps = int(nsteps)
     burn = int(burn)
-    if posterior_sample_count is not None:
-        posterior_sample_count = int(posterior_sample_count)
-        if posterior_sample_count < 1:
-            raise ValueError("posterior_sample_count must be at least 1")
-        if not return_sampler:
-            raise ValueError(
-                "posterior_sample_count requires return_sampler=True"
-            )
-        if burn >= nsteps:
-            raise ValueError("burn must be smaller than nsteps")
     p0 = _initial_batched_walker_positions(nfits, nwalkers, initial_walker_state)
     nwalkers = p0.shape[1]
     position = jax.device_put(jax_numpy.asarray(p0), fit_device)
@@ -872,18 +855,6 @@ def self_lensing_systems_from_batched_fit_blackjax(
     def run_steps(position, log_prob, rng_keys):
         return jax.lax.scan(one_step, (position, log_prob), rng_keys)
 
-    def advance_one_step(carry, rng_key):
-        next_carry, _ = one_step(carry, rng_key)
-        return next_carry, None
-
-    @jax.jit
-    def advance_steps(position, log_prob, rng_keys):
-        return jax.lax.scan(
-            advance_one_step,
-            (position, log_prob),
-            rng_keys,
-        )[0]
-
     rng_key = jax.random.PRNGKey(random_seed)
     chain_chunks = []
     log_prob_chunks = []
@@ -907,67 +878,37 @@ def self_lensing_systems_from_batched_fit_blackjax(
         progress_iter = None
 
     try:
-        if posterior_sample_count is not None:
-            # Store evenly spaced walker snapshots. Four snapshots for 128
-            # walkers provide the requested 512 samples without retaining 800
-            # full post-burn iterations on device.
-            retained_walkers = min(nwalkers, posterior_sample_count)
-            retained_steps = min(
-                max(1, posterior_sample_count // retained_walkers),
-                nsteps - burn,
-            )
-            segment_lengths = numpy.full(
-                retained_steps,
-                (nsteps - burn) // retained_steps,
-                dtype=int,
-            )
-            segment_lengths[: (nsteps - burn) % retained_steps] += 1
-            if burn:
-                rng_key, sample_key = jax.random.split(rng_key)
-                step_keys = jax.random.split(sample_key, burn)
-                position, log_prob = advance_steps(position, log_prob, step_keys)
-                if progress_iter is not None:
-                    progress_iter.update(burn)
-            for segment_length in segment_lengths:
-                rng_key, sample_key = jax.random.split(rng_key)
-                step_keys = jax.random.split(sample_key, int(segment_length))
-                position, log_prob = advance_steps(position, log_prob, step_keys)
-                chain_chunks.append(position[:, :retained_walkers, :])
-                log_prob_chunks.append(log_prob[:, :retained_walkers])
-                if progress_iter is not None:
-                    progress_iter.update(int(segment_length))
-        else:
-            chunk_size = nsteps if not progress else max(1, int(progress_chunk_size))
-            while remaining_steps > 0:
-                current_chunk_size = min(chunk_size, remaining_steps)
-                rng_key, sample_key = jax.random.split(rng_key)
-                step_keys = jax.random.split(sample_key, current_chunk_size)
-                if return_sampler:
-                    (position, log_prob), (positions, chunk_log_prob, accepted) = run_steps(
-                        position, log_prob, step_keys
-                    )
-                    chain_chunks.append(positions)
-                    log_prob_chunks.append(chunk_log_prob)
-                    acceptance_chunks.append(accepted)
-                else:
-                    (position, log_prob), (positions, chunk_log_prob, _accepted) = run_steps(
-                        position, log_prob, step_keys
-                    )
-                    keep_steps = (
-                        jnp.arange(completed_steps, completed_steps + current_chunk_size)
-                        >= burn
-                    )
-                    top_positions, top_log_prob = _update_batched_top_posterior_samples(
-                        top_positions,
-                        top_log_prob,
-                        positions,
-                        chunk_log_prob,
-                        keep_steps,
-                    )
-                remaining_steps -= current_chunk_size
-                completed_steps += current_chunk_size
-                if progress_iter is not None:
-                    progress_iter.update(current_chunk_size)
+        chunk_size = nsteps if not progress else max(1, int(progress_chunk_size))
+        while remaining_steps > 0:
+            current_chunk_size = min(chunk_size, remaining_steps)
+            rng_key, sample_key = jax.random.split(rng_key)
+            step_keys = jax.random.split(sample_key, current_chunk_size)
+            if return_sampler:
+                (position, log_prob), (positions, chunk_log_prob, accepted) = run_steps(
+                    position, log_prob, step_keys
+                )
+                chain_chunks.append(positions)
+                log_prob_chunks.append(chunk_log_prob)
+                acceptance_chunks.append(accepted)
+            else:
+                (position, log_prob), (positions, chunk_log_prob, _accepted) = run_steps(
+                    position, log_prob, step_keys
+                )
+                keep_steps = (
+                    jnp.arange(completed_steps, completed_steps + current_chunk_size)
+                    >= burn
+                )
+                top_positions, top_log_prob = _update_batched_top_posterior_samples(
+                    top_positions,
+                    top_log_prob,
+                    positions,
+                    chunk_log_prob,
+                    keep_steps,
+                )
+            remaining_steps -= current_chunk_size
+            completed_steps += current_chunk_size
+            if progress_iter is not None:
+                progress_iter.update(current_chunk_size)
     finally:
         if progress_iter is not None:
             progress_iter.close()
@@ -978,23 +919,12 @@ def self_lensing_systems_from_batched_fit_blackjax(
         else None
     )
     if return_sampler:
-        if posterior_sample_count is None:
-            chain_all = jnp.concatenate(chain_chunks, axis=0)
-            log_prob_all = jnp.concatenate(log_prob_chunks, axis=0)
-        else:
-            # Bounded retention appends one (nfits, nwalkers, ndim) snapshot
-            # per interval; make the retained-time dimension explicit.
-            chain_all = jnp.stack(chain_chunks, axis=0)
-            log_prob_all = jnp.stack(log_prob_chunks, axis=0)
-        sampled_chain_start = burn if posterior_sample_count is not None else 0
-        post_burn_chain = chain_all if posterior_sample_count is not None else chain_all[burn:]
-        post_burn_log_prob = (
-            log_prob_all if posterior_sample_count is not None else log_prob_all[burn:]
-        )
-        flat_positions = jnp.transpose(post_burn_chain, (1, 0, 2, 3)).reshape(
+        chain_all = jnp.concatenate(chain_chunks, axis=0)
+        log_prob_all = jnp.concatenate(log_prob_chunks, axis=0)
+        flat_positions = jnp.transpose(chain_all[burn:], (1, 0, 2, 3)).reshape(
             (nfits, -1, chain_all.shape[-1])
         )
-        flat_log_prob = jnp.transpose(post_burn_log_prob, (1, 0, 2)).reshape(
+        flat_log_prob = jnp.transpose(log_prob_all[burn:], (1, 0, 2)).reshape(
             (nfits, -1)
         )
         summary_top_k = min(posterior_summary_top_k, flat_log_prob.shape[1])
@@ -1025,17 +955,12 @@ def self_lensing_systems_from_batched_fit_blackjax(
     if return_sampler:
         chain = jax.device_get(chain_all)
         log_prob = jax.device_get(log_prob_all)
-        acceptance = (
-            jax.device_get(jnp.concatenate(acceptance_chunks, axis=0))
-            if acceptance_chunks
-            else None
-        )
+        acceptance = jax.device_get(jnp.concatenate(acceptance_chunks, axis=0))
         samplers = [
             BlackJAXSamplerResult(
                 chain[:, fit_index, :, :],
                 log_prob[:, fit_index, :],
-                acceptance=None if acceptance is None else acceptance[:, fit_index, :],
-                chain_start_step=sampled_chain_start,
+                acceptance=acceptance[:, fit_index, :],
             )
             for fit_index in range(nfits)
         ]
