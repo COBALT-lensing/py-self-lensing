@@ -12,6 +12,62 @@ from ..generators import RVGenerator, LightcurveGenerator, GPLightcurveGenerator
 from ..gp.PriorsSamplers import log_prior_bounds
 from ..models import SelfLensingSystem, DEFAULT_LIMITS
 from ._utils import _device_array, _extract_value, gauss_lnprior
+from .numeric import deterministic_models, parameter_row, physical_validity
+
+
+def numeric_combined_chi2(params, Mcomp, Rcomp, Teff, peak_time, rv_times, observed_rv, observed_rv_err, lc_times, observed_lc, observed_lc_err, detected_periods, center_lc_model=False, period_min=None, period_max=None, rv_mask=None, lc_mask=None):
+    """Quantity-free deterministic likelihood used inside JIT/vmap fitting."""
+    lp = log_prior_bounds(params, (DEFAULT_LIMITS["a"], DEFAULT_LIMITS["i"], DEFAULT_LIMITS["Macc"], DEFAULT_LIMITS["e"], DEFAULT_LIMITS["periapsis_phase"]))
+    model_params = parameter_row(params, Mcomp, Rcomp, Teff)
+    valid, period = physical_validity(model_params)
+    if period_min is not None:
+        valid = valid & (period >= period_min)
+    if period_max is not None:
+        valid = valid & (period <= period_max)
+    model_lc, model_rv = deterministic_models(lc_times, rv_times, model_params, peak_time)
+    if observed_lc is not None:
+        if center_lc_model:
+            model_lc = model_lc - 1.0
+        lp = lp + chi2_masked(observed_lc, observed_lc_err, model_lc, lc_mask)
+    if observed_rv is not None:
+        lp = lp + chi2_masked(observed_rv, observed_rv_err, model_rv, rv_mask)
+    periods = jnp.where(jnp.isfinite(detected_periods), detected_periods, jnp.inf)
+    lp = lp + jax.lax.cond(jnp.any(jnp.isfinite(periods)), lambda: gauss_lnprior(period, periods[jnp.argmin(jnp.abs(periods - period))], 0.1), lambda: 0.0)
+    return jnp.where(jnp.isfinite(lp) & valid, lp, -jnp.inf)
+from .numeric import deterministic_models, parameter_row, physical_validity
+
+
+def numeric_combined_chi2(params, Mcomp, Rcomp, tau_eff, d, peak_time, rv_times,
+                          observed_rv, observed_rv_err, lc_times, observed_lc,
+                          observed_lc_err, detected_periods, center_lc_model=False,
+                          period_min=None, period_max=None, rv_mask=None, lc_mask=None):
+    """Object-free deterministic equivalent of :func:`combined_chi2`.
+
+    Inputs have already crossed the public API boundary and are plain values in
+    the documented public units.  Keeping this function free of quantities and
+    ``SelfLensingSystem`` makes it safe to vmap/jit over walkers and systems.
+    """
+    bounds = log_prior_bounds(params, (DEFAULT_LIMITS["a"], DEFAULT_LIMITS["i"],
+        DEFAULT_LIMITS["Macc"], DEFAULT_LIMITS["e"], DEFAULT_LIMITS["periapsis_phase"]))
+    model_params = parameter_row(params, Mcomp, Rcomp, Rcomp * 0 + 5772.0)
+    valid, period = physical_validity(model_params)
+    if period_min is not None:
+        valid = valid & (period >= period_min)
+    if period_max is not None:
+        valid = valid & (period <= period_max)
+    lc_model, rv_model = deterministic_models(lc_times, rv_times, model_params, peak_time)
+    result = bounds
+    if observed_rv is not None:
+        result = result + chi2_masked(observed_rv, observed_rv_err, rv_model, rv_mask)
+    if observed_lc is not None:
+        if center_lc_model:
+            lc_model = lc_model - 1.0
+        result = result + chi2_masked(observed_lc, observed_lc_err, lc_model, lc_mask)
+    finite_periods = jnp.where(jnp.isfinite(detected_periods), detected_periods, jnp.inf)
+    result = result + jax.lax.cond(jnp.any(jnp.isfinite(detected_periods)),
+        lambda: gauss_lnprior(period, finite_periods[jnp.argmin(jnp.abs(finite_periods-period))], 0.1),
+        lambda: 0.0)
+    return jnp.where(jnp.isfinite(bounds) & valid, result, -jnp.inf)
 
 
 @quaxify
@@ -581,28 +637,13 @@ def make_batched_combined_chi2_vec_jax(
     ):
         return jnp.asarray(
             jax.vmap(
-                lambda p: combined_chi2(
-                    p,
-                    row_Mcomp,
-                    row_Rcomp,
-                    row_tau_eff,
-                    row_d,
-                    row_peak_time,
-                    row_rv_times,
-                    row_observed_rv,
-                    row_observed_rv_err,
-                    row_lc_times,
-                    row_observed_lc,
-                    row_observed_lc_err,
-                    None,
-                    row_detected_periods,
-                    lensing_method,
-                    center_lc_model,
-                    period_min,
-                    period_max,
-                    model_sls,
-                    row_rv_mask,
-                    row_lc_mask,
+                lambda p: numeric_combined_chi2(
+                    p, row_Mcomp, row_Rcomp, 5772.0 * row_Mcomp ** 0.475,
+                    row_peak_time, row_rv_times, row_observed_rv,
+                    row_observed_rv_err, row_lc_times, row_observed_lc,
+                    row_observed_lc_err, row_detected_periods,
+                    center_lc_model, period_min, period_max,
+                    row_rv_mask, row_lc_mask,
                 )
             )(params)
         )
@@ -684,6 +725,4 @@ def make_batched_combined_chi2_vec_jax(
 
     def logprob(params):
         params = jax.device_put(params, device)
-        return batched_chi2_vec(params)
-
-    return logprob
+        return b
