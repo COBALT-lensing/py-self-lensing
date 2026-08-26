@@ -12,6 +12,7 @@ from ..generators import RVGenerator, LightcurveGenerator, GPLightcurveGenerator
 from ..gp.PriorsSamplers import log_prior_bounds
 from ..models import SelfLensingSystem, DEFAULT_LIMITS
 from ._utils import _device_array, _extract_value, gauss_lnprior
+from .numeric import deterministic_models, parameter_row, physical_properties
 
 
 @quaxify
@@ -293,6 +294,81 @@ def chi2_masked(obs, obs_err, model, mask=None):
     mask = jnp.asarray(mask, dtype=bool)
     weight = mask.astype(float)
     return -jnp.sum(weight * (obs - model) ** 2 / obs_err**2)
+
+
+def numeric_combined_chi2(
+    params,
+    Mcomp,
+    Rcomp,
+    tau_eff,
+    peak_time,
+    rv_times,
+    observed_rv,
+    observed_rv_err,
+    lc_times,
+    observed_lc,
+    observed_lc_err,
+    detected_periods,
+    center_lc_model=False,
+    period_min=None,
+    period_max=None,
+    rv_mask=None,
+    lc_mask=None,
+):
+    """Object-free deterministic equivalent of :func:`combined_chi2`.
+
+    All values use the public units accepted by ``combined_chi2``.  It is kept
+    deliberately separate from that public, quantity-aware function so only
+    the batched BlackJAX sampler uses this fully numeric path.
+    """
+    bounds = log_prior_bounds(
+        params,
+        (
+            DEFAULT_LIMITS["a"],
+            DEFAULT_LIMITS["i"],
+            DEFAULT_LIMITS["Macc"],
+            DEFAULT_LIMITS["e"],
+            DEFAULT_LIMITS["periapsis_phase"],
+        ),
+    )
+    model_params = parameter_row(params, Mcomp, Rcomp)
+    valid, period, model_tau_eff = physical_properties(model_params)
+    if period_min is not None:
+        valid = valid & (period >= period_min)
+    if period_max is not None:
+        valid = valid & (period <= period_max)
+    if tau_eff is not None:
+        valid = valid & (jnp.isnan(tau_eff) | jnp.isfinite(model_tau_eff))
+
+    model_lc, model_rv = deterministic_models(lc_times, rv_times, model_params, peak_time)
+    result = bounds
+    if observed_rv is not None:
+        result = result + chi2_masked(observed_rv, observed_rv_err, model_rv, rv_mask)
+    if observed_lc is not None:
+        if center_lc_model:
+            model_lc = model_lc - 1.0
+        result = result + chi2_masked(observed_lc, observed_lc_err, model_lc, lc_mask)
+
+    if detected_periods.size > 0:
+        finite_periods = jnp.where(
+            jnp.isfinite(detected_periods), detected_periods, jnp.inf
+        )
+        result = result + jax.lax.cond(
+            jnp.any(jnp.isfinite(detected_periods)),
+            lambda: gauss_lnprior(
+                period,
+                finite_periods[jnp.argmin(jnp.abs(finite_periods - period))],
+                0.1,
+            ),
+            lambda: 0.0,
+        )
+    if tau_eff is not None:
+        result = result + jax.lax.cond(
+            jnp.logical_not(jnp.isnan(tau_eff)),
+            lambda: gauss_lnprior(model_tau_eff, tau_eff, tau_eff / 100),
+            lambda: 0.0,
+        )
+    return jnp.where(jnp.isfinite(bounds) & valid, result, -jnp.inf)
 
 
 
@@ -685,5 +761,139 @@ def make_batched_combined_chi2_vec_jax(
     def logprob(params):
         params = jax.device_put(params, device)
         return batched_chi2_vec(params)
+
+    return logprob
+
+
+def make_batched_numeric_combined_chi2_vec_jax(
+    Mcomp,
+    Rcomp,
+    tau_eff,
+    peak_time,
+    rv_times,
+    observed_rv,
+    observed_rv_err,
+    lc_times,
+    observed_lc,
+    observed_lc_err,
+    detected_periods,
+    center_lc_model=False,
+    period_min=None,
+    period_max=None,
+    rv_mask=None,
+    lc_mask=None,
+    device=None,
+):
+    """Build the numeric likelihood used exclusively by batched BlackJAX fits."""
+    values = [
+        Mcomp,
+        Rcomp,
+        tau_eff,
+        peak_time,
+        rv_times,
+        observed_rv,
+        observed_rv_err,
+        lc_times,
+        observed_lc,
+        observed_lc_err,
+        detected_periods,
+        rv_mask,
+        lc_mask,
+    ]
+    (
+        Mcomp,
+        Rcomp,
+        tau_eff,
+        peak_time,
+        rv_times,
+        observed_rv,
+        observed_rv_err,
+        lc_times,
+        observed_lc,
+        observed_lc_err,
+        detected_periods,
+        rv_mask,
+        lc_mask,
+    ) = [_device_array(_extract_value(value), device) for value in values]
+
+    def row_logprob(
+        row_params,
+        row_Mcomp,
+        row_Rcomp,
+        row_tau_eff,
+        row_peak_time,
+        row_rv_times,
+        row_observed_rv,
+        row_observed_rv_err,
+        row_lc_times,
+        row_observed_lc,
+        row_observed_lc_err,
+        row_detected_periods,
+        row_rv_mask,
+        row_lc_mask,
+    ):
+        return jax.vmap(
+            lambda walker: numeric_combined_chi2(
+                walker,
+                row_Mcomp,
+                row_Rcomp,
+                row_tau_eff,
+                row_peak_time,
+                row_rv_times,
+                row_observed_rv,
+                row_observed_rv_err,
+                row_lc_times,
+                row_observed_lc,
+                row_observed_lc_err,
+                row_detected_periods,
+                center_lc_model,
+                period_min,
+                period_max,
+                row_rv_mask,
+                row_lc_mask,
+            )
+        )(row_params)
+
+    def _batched_logprob(params):
+        params = jax.device_put(jax_numpy.asarray(params), device)
+        if tau_eff is None:
+            return jax.vmap(
+                lambda *row: row_logprob(row[0], row[1], row[2], None, *row[3:])
+            )(
+                params,
+                Mcomp,
+                Rcomp,
+                peak_time,
+                rv_times,
+                observed_rv,
+                observed_rv_err,
+                lc_times,
+                observed_lc,
+                observed_lc_err,
+                detected_periods,
+                rv_mask,
+                lc_mask,
+            )
+        return jax.vmap(row_logprob)(
+            params,
+            Mcomp,
+            Rcomp,
+            tau_eff,
+            peak_time,
+            rv_times,
+            observed_rv,
+            observed_rv_err,
+            lc_times,
+            observed_lc,
+            observed_lc_err,
+            detected_periods,
+            rv_mask,
+            lc_mask,
+        )
+
+    batched_logprob = jax.jit(_batched_logprob)
+
+    def logprob(params):
+        return batched_logprob(jax.device_put(params, device))
 
     return logprob
