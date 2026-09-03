@@ -37,7 +37,7 @@ PARAMETER_ORDER = (
 _H = constants.h.value
 _K_B = constants.k_B.value
 _OBS_FREQ_HZ = (551 * units.nm).to(units.Hz, equivalencies=units.spectral()).value
-_EV_BETA = 0.15 * (1 + 0.32) * (15 + 0.6) / (3 - 0.6)
+_EV_BETA = 0.15 * (1 + 0.32) * (15 + 0.51) / (3 - 0.51)
 
 
 def extract_value(value):

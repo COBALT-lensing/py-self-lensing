@@ -8,8 +8,10 @@ from scipy import special
 
 RADIUS_LIM = 1e-5
 ANNULUS_WIDTH = 1e-4
-LD_COEFF = 0.6
-LD_LINEAR_INT = 2.5132741228717936
+# Claret (2017) TESS LSM coefficient for a solar-metallicity dwarf with
+# Teff=5750 K, log g=4.5, and xi=2 km s^-1.
+LD_COEFF = 0.51
+LD_LINEAR_INT = 3.141592653589793 * (1.0 - LD_COEFF / 3.0)
 ELLIPTIC_QUADRATURE_POINTS = 96
 BRIGHTNESS_QUADRATURE_POINTS = 96
 
