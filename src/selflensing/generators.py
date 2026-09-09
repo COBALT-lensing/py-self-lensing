@@ -17,7 +17,7 @@ from .lightcurves import (
     radial_velocity_m_per_s,
     self_lensing_amplification,
 )
-from .lensing import wm_callback
+from .lensing import LD_COEFF, wm_callback
 from .models import SelfLensingSystem, _quantity_value
 
 # from src.selflensing.gp.LensingGP import _run_nucs_safe
@@ -270,7 +270,7 @@ class EllipsoidalVariationsLightcurveGenerator(FlatLightcurveGenerator):
     # https://www.aanda.org/articles/aa/full_html/2017/04/aa29705-16/aa29705-16.html
     # But these will do for now.
     g = 0.32  # Gravity darkening co-efficient derived from Lucy 1967 https://ui.adsabs.harvard.edu/abs/1967ZA.....65...89L/abstract
-    gamma = 0.51  # Claret (2017) solar-dwarf TESS linear coefficient
+    gamma = LD_COEFF
 
     def __str__(self):
         return "Generated Ellipsoidal Variations Light Curve"

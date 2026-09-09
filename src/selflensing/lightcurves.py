@@ -6,7 +6,7 @@ import jax
 from astropy import constants, units
 from jax import numpy as jnp
 
-from .lensing import integrated_witt_mao_magnification_jax
+from .lensing import LD_COEFF, integrated_witt_mao_magnification_jax
 from .orbits import (
     AU_M,
     C,
@@ -37,7 +37,7 @@ PARAMETER_ORDER = (
 _H = constants.h.value
 _K_B = constants.k_B.value
 _OBS_FREQ_HZ = (551 * units.nm).to(units.Hz, equivalencies=units.spectral()).value
-_EV_BETA = 0.15 * (1 + 0.32) * (15 + 0.51) / (3 - 0.51)
+_EV_BETA = 0.15 * (1 + 0.32) * (15 + LD_COEFF) / (3 - LD_COEFF)
 
 
 def extract_value(value):
