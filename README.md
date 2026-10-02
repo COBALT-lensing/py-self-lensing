@@ -194,10 +194,21 @@ The fitter samples five parameters:
 - `e`: eccentricity.
 - `periapsis_phase`: periapsis phase, in radians.
 
+The default inclination bounds are 0 to pi/2 radians (face-on to edge-on),
+with the existing uniform-in-inclination prior. Fits do not require
+`SelfLensingSystem.sl_possible`: non-lensing binaries can explain photometry
+and RVs through ellipsoidal variation and Doppler boosting, while lensing is
+computed from the same physical model. An explicit `tau_eff` prior still
+requires a finite self-lensing event duration. Period and other parameter
+bounds remain enforced. Function call signatures are unchanged. Start fresh
+chains when comparing against older fits restricted to near-edge-on geometry;
+old walker states still work but retain their narrow starting distribution.
+
 The companion properties (`Mcomp`, and usually `Rcomp` and `Teff`), distance
 `d`, and the reference `peak_time` are treated as fixed inputs. The returned
 `sls_fit` is a `SelfLensingSystem` constructed from the highest log-probability
-post-burn-in sample. The `sampler` is the underlying `emcee.EnsembleSampler`,
+post-burn-in sample; its parameters come from that actual chain sample, not an
+average across samples. The `sampler` is the underlying `emcee.EnsembleSampler`,
 and `walker_state` can be passed back as `initial_walker_state` to continue or
 refine a run:
 

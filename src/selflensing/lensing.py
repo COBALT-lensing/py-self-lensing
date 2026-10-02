@@ -13,6 +13,9 @@ LD_COEFF = 0.6
 LD_LINEAR_INT = 3.141592653589793 * (1.0 - LD_COEFF / 3.0)
 ELLIPTIC_QUADRATURE_POINTS = 96
 BRIGHTNESS_QUADRATURE_POINTS = 96
+# Bound the timestamp x brightness x elliptic workspace, including under vmap
+# over MCMC walkers. This changes evaluation order, not quadrature resolution.
+LENSING_TIME_BATCH_SIZE = 32
 
 _LEGENDRE_NODES, _LEGENDRE_WEIGHTS = special.roots_legendre(
     ELLIPTIC_QUADRATURE_POINTS
@@ -202,4 +205,7 @@ def integrated_witt_mao_magnification_jax(l, re, rstar):
         & (re > 0.0)
         & (rstar > 0.0)
     )
-    return jnp.where(valid, jax.vmap(integrate_one)(l_scaled), jnp.nan)
+    magnification = jax.lax.map(
+        integrate_one, l_scaled, batch_size=LENSING_TIME_BATCH_SIZE
+    )
+    return jnp.where(valid, magnification, jnp.nan)

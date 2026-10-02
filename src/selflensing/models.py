@@ -26,8 +26,9 @@ jax.config.update("jax_enable_x64", True)
 
 DEFAULT_LIMITS = {
     "a": (0.1, 200),
-    "i": (0.5 * jnp.pi - 0.0001, 0.5 * jnp.pi),
-    "Macc": (0.5, 50),
+    # Allow both lensing and non-lensing binary orientations.
+    "i": (0.0, 0.5 * jnp.pi),
+    "Macc": (0.1, 50),
     "Mcomp": (0.5, 50),
     "e": (0, 0.999999),
     "periapsis_phase": (0, 2 * jnp.pi),

@@ -42,6 +42,19 @@ class WittMaoJaxTest(unittest.TestCase):
                 self.assertTrue(np.all(np.isfinite(jax_values)))
                 self.assertTrue(np.all(jax_values >= 1.0))
 
+    def test_batched_timestamps_match_individual_evaluations_under_walker_vmap(self):
+        # Cross multiple batches plus a partial tail, and vectorize over walkers.
+        offsets = jnp.linspace(0., 2., 67, dtype=jnp.float64)
+        radii = jnp.array([.02, .1, .5])
+        evaluate = jax.jit(jax.vmap(
+            lambda re: integrated_witt_mao_magnification_jax(offsets, re, 1.)))
+        actual = np.asarray(evaluate(radii))
+        single = jax.jit(lambda offset, re:
+            integrated_witt_mao_magnification_jax(offset[None], re, 1.)[0])
+        expected = np.array([[single(offset, re) for offset in offsets] for re in radii])
+        assert_allclose(actual, expected, rtol=1e-12, atol=1e-12)
+        self.assertTrue(np.isfinite(actual).all())
+
     def test_witt_mao_can_be_jitted(self):
         offsets = jnp.array([0.0, 0.1, 0.5, 1.0, 2.0], dtype=jnp.float64)
         re = 0.1

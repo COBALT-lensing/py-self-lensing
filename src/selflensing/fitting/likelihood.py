@@ -39,8 +39,12 @@ def combined_chi2(
     model_sls=None,
     rv_mask=None,
     lc_mask=None,
+    peak_time_prior_sigma=None,
 ):
     """Compute log-likelihood for self-lensing binary parameters.
+
+    Non-lensing orientations are allowed: self-lensing feasibility is not a
+    prior. An explicit tau_eff prior still requires a finite lensing duration.
 
     The @quaxify decorator allows astropy Quantity and Time objects to work
     with JAX tracers. However, astropy operations execute at Python level
@@ -75,8 +79,11 @@ def combined_chi2(
         observed_rv = unxt.Quantity(observed_rv, units.m / units.s)
     if observed_rv_err is not None:
         observed_rv_err = unxt.Quantity(observed_rv_err, units.m / units.s)
+    model_params = params[:5]
+    peak_time_offset = params[5] if peak_time_prior_sigma is not None else 0.0
+    effective_peak_time = peak_time + peak_time_offset
     lp_bounds = log_prior_bounds(
-        params,
+        model_params,
         (
             DEFAULT_LIMITS["a"],
             DEFAULT_LIMITS["i"],
@@ -90,7 +97,7 @@ def combined_chi2(
     # This function is *only* called if lp_bounds is finite
     @quaxify
     def compute_full_logprob(_):
-        a, i, Macc, e, periapsis_phase = params
+        a, i, Macc, e, periapsis_phase = model_params
 
         a = unxt.Quantity(a, SelfLensingSystem.param_units["a"])
         Macc = unxt.Quantity(Macc, SelfLensingSystem.param_units["Macc"])
@@ -129,16 +136,20 @@ def combined_chi2(
                     condition.value if hasattr(condition, "value") else condition
                 )
 
-            props_ok = condition_value(new_model_sls.sl_possible)
+            # A binary need not transit/lens to explain photometry or RVs.
+            period = condition_value(new_model_sls.porb.to(units.day).value)
+            props_ok = jnp.isfinite(period) & (period > 0)
             if period_min is not None:
                 props_ok = jnp.logical_and(
                     props_ok,
-                    condition_value(new_model_sls.porb >= period_min),
+                    condition_value(new_model_sls.porb.to(units.day).value)
+                    >= period_min,
                 )
             if period_max is not None:
                 props_ok = jnp.logical_and(
                     props_ok,
-                    condition_value(new_model_sls.porb <= period_max),
+                    condition_value(new_model_sls.porb.to(units.day).value)
+                    <= period_max,
                 )
             if tau_eff is not None:
                 props_ok = jnp.logical_and(
@@ -188,8 +199,10 @@ def combined_chi2(
                 )
 
             def calc_rv_chi2():
-                rv_gen = RVGenerator(new_model_sls, times=rv_times, peak_time=peak_time)
-                return chi2_masked(
+                rv_gen = RVGenerator(
+                    new_model_sls, times=rv_times, peak_time=effective_peak_time
+                )
+                return profiled_rv_chi2(
                     observed_rv.to(units.m / units.s).value,
                     observed_rv_err.to(units.m / units.s).value,
                     rv_gen.rv.to(units.m / units.s).value,
@@ -201,7 +214,7 @@ def combined_chi2(
                     lc_gen = LightcurveGenerator(
                         new_model_sls,
                         times=lc_times,
-                        peak_time=peak_time,
+                        peak_time=effective_peak_time,
                         lensing_method=lensing_method,
                     )
                     model_lc = lc_gen.flux_array
@@ -220,7 +233,7 @@ def combined_chi2(
                     lc_gen = GPLightcurveGenerator(
                         new_model_sls,
                         times=lc_times,
-                        peak_time=peak_time,
+                        peak_time=effective_peak_time,
                         lensing_method=lensing_method,
                         gp=gp_model(new_model_sls, lc_times.jd, observed_lc),
                     )
@@ -262,7 +275,12 @@ def combined_chi2(
             #     tau_eff=tau_eff_err,
             # )
 
-            return rv_chi2 + lc_chi2 + period_err + tau_eff_err
+            peak_time_err = (
+                0.0
+                if peak_time_prior_sigma is None
+                else gauss_lnprior(peak_time_offset, 0.0, peak_time_prior_sigma)
+            )
+            return rv_chi2 + lc_chi2 + period_err + tau_eff_err + peak_time_err
 
         return jax.lax.cond(
             check_sls_props(),
@@ -294,6 +312,20 @@ def chi2_masked(obs, obs_err, model, mask=None):
     mask = jnp.asarray(mask, dtype=bool)
     weight = mask.astype(float)
     return -jnp.sum(weight * (obs - model) ** 2 / obs_err**2)
+
+
+def profiled_rv_chi2(obs, obs_err, orbital_model, mask=None):
+    """RV chi squared after profiling a constant systemic velocity."""
+    weight = 1.0 / obs_err**2
+    if mask is not None:
+        weight = weight * jnp.asarray(mask, dtype=bool).astype(float)
+    weight_sum = jnp.sum(weight)
+    systemic_velocity = jnp.where(
+        weight_sum > 0,
+        jnp.sum(weight * (obs - orbital_model)) / weight_sum,
+        0.0,
+    )
+    return -jnp.sum(weight * (obs - orbital_model - systemic_velocity) ** 2)
 
 
 def numeric_combined_chi2(
@@ -332,7 +364,9 @@ def numeric_combined_chi2(
         ),
     )
     model_params = parameter_row(params, Mcomp, Rcomp)
-    valid, period, model_tau_eff = physical_properties(model_params)
+    _sl_possible, period, model_tau_eff = physical_properties(model_params)
+    # Match combined_chi2: lensing feasibility is diagnostic, not a hard prior.
+    valid = jnp.isfinite(period) & (period > 0)
     if period_min is not None:
         valid = valid & (period >= period_min)
     if period_max is not None:
@@ -343,7 +377,9 @@ def numeric_combined_chi2(
     model_lc, model_rv = deterministic_models(lc_times, rv_times, model_params, peak_time)
     result = bounds
     if observed_rv is not None:
-        result = result + chi2_masked(observed_rv, observed_rv_err, model_rv, rv_mask)
+        result = result + profiled_rv_chi2(
+            observed_rv, observed_rv_err, model_rv, rv_mask
+        )
     if observed_lc is not None:
         if center_lc_model:
             model_lc = model_lc - 1.0
@@ -505,6 +541,7 @@ def make_combined_chi2_vec_jax(
     period_max=None,
     model_sls=None,
     device=None,
+    peak_time_prior_sigma=None,
 ):
     """Build a JAX-native vectorized log-probability function.
 
@@ -524,6 +561,8 @@ def make_combined_chi2_vec_jax(
     observed_lc = _extract_value(observed_lc)
     observed_lc_err = _extract_value(observed_lc_err)
     detected_periods = _extract_value(detected_periods)
+    period_min = _extract_value(period_min)
+    period_max = _extract_value(period_max)
 
     Mcomp = _device_array(Mcomp, device)
     Rcomp = _device_array(Rcomp, device)
@@ -560,6 +599,7 @@ def make_combined_chi2_vec_jax(
                     period_min,
                     period_max,
                     model_sls,
+                    peak_time_prior_sigma=peak_time_prior_sigma,
                 )
             )(params)
         )
