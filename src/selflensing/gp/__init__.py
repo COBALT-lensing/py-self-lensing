@@ -7,8 +7,6 @@ import emcee
 import jax.numpy as jnp
 
 import os
-import random
-import time
 
 from . import (
     FluxFinderSensitivity as ff,
@@ -34,7 +32,6 @@ class TESSGP(BaseGP):
     mu_bounds = [(0.0, 7.0)]  # log10 μ
     cadence_s = 600.0
     use_kde_flag = True
-    Q_s = 5.0  # S: quality factor (broad)
     log_tau_f_bounds = (2, 6.5)
 
     def __init__(
@@ -45,7 +42,18 @@ class TESSGP(BaseGP):
         mean_vals=None,
         nwalkers=None,
         kernel_type=default_kernel_type,
+        *,
+        rng=None,
+        seismic_quality_bounds=ps.SEISMIC_Q_BOUNDS,
+        component_ppm=None,
     ):
+        # One draw per component per source setup; generate() reuses those
+        # hyperparameters while drawing a new GP realisation.
+        self.rng = np.random.default_rng(rng)
+        self.seismic_quality_bounds = seismic_quality_bounds
+        self.component_ppm = dict(component_ppm or {})
+        if set(self.component_ppm) - set("GSF"):
+            raise ValueError("component_ppm supports only G, S, and F")
         self.kernel_type = kernel_type
         self.sls = sls
 
@@ -80,10 +88,7 @@ class TESSGP(BaseGP):
 
     @property
     def seed(self):
-        prev_seed = getattr(self, "_prev_seed", 0)
-        seed = (int(time.time()) + prev_seed) % (2**32)
-        self._prev_seed = seed
-        return seed
+        return int(self.rng.integers(0, 2**32, dtype=np.uint64))
 
     def generate(self):
         # --- assemble theta and build GP ---
@@ -109,9 +114,9 @@ class TESSGP(BaseGP):
     @kernel_type.setter
     def kernel_type(self, v):
         self._kernel_type = v
-        if hasattr(self, "logprob"):
+        if "logprob" in self.__dict__:
             del self.logprob
-        if hasattr(self, "model"):
+        if "model" in self.__dict__:
             del self.model
 
     @property
@@ -121,9 +126,9 @@ class TESSGP(BaseGP):
     @sls.setter
     def sls(self, sls):
         self._sls = sls
-        if hasattr(self, "logprob"):
+        if "logprob" in self.__dict__:
             del self.logprob
-        if hasattr(self, "model"):
+        if "model" in self.__dict__:
             del self.model
 
         test_Mag, noise_measure = ff.conv_mass_to_mag(
@@ -146,9 +151,10 @@ class TESSGP(BaseGP):
             self.lnu_g = jnp.log10(
                 physr.granulation_frequency_relation(self.sls.Mcomp.value).astype(float)
             )  # G: log10 ν_gran [Hz]
-            self.lsig_g = ps.expected_log_sigma(jnp.asarray(self.mu_test), "G").astype(
-                float
-            )  # G: log10 σ_gran
+            self.lsig_g = ps.sample_log_sigma(
+                jnp.asarray(self.mu_test), "G", self.rng,
+                ppm=self.component_ppm.get("G"),
+            ).astype(float)  # G: log10 σ_gran
             self.g_hypers = jnp.array(
                 [
                     self.lnu_g,
@@ -166,10 +172,12 @@ class TESSGP(BaseGP):
                 )
             )  # S: log10 ν_seis [Hz]
 
-            self.lsig_s = ps.expected_log_sigma(jnp.asarray(self.mu_test), "S").astype(
-                float
-            )  # S: log10 σ_seis
+            self.lsig_s = ps.sample_log_sigma(
+                jnp.asarray(self.mu_test), "S", self.rng,
+                ppm=self.component_ppm.get("S"),
+            ).astype(float)  # S: log10 σ_seis
 
+            self.Q_s = ps.sample_quality_factor(self.rng, bounds=self.seismic_quality_bounds)
             self.s_hypers = jnp.array([self.lnu_s, self.Q_s, self.lsig_s], dtype=float)
         else:
             self.s_hypers = jnp.array([])
@@ -177,8 +185,11 @@ class TESSGP(BaseGP):
         if "F" in self.kernel_type:
             self.f_hypers = jnp.array(
                 [
-                    10 ** random.uniform(*self.log_tau_f_bounds),
-                    ps.expected_log_sigma(jnp.asarray(self.mu_test), "F"),
+                    10 ** self.rng.uniform(*self.log_tau_f_bounds),
+                    ps.sample_log_sigma(
+                        jnp.asarray(self.mu_test), "F", self.rng,
+                        ppm=self.component_ppm.get("F"),
+                    ),
                 ]
             )
         else:
@@ -202,9 +213,9 @@ class TESSGP(BaseGP):
     @mean_vals.setter
     def mean_vals(self, v):
         self._mean_vals = v
-        if hasattr(self, "logprob"):
+        if "logprob" in self.__dict__:
             del self.logprob
-        if hasattr(self, "model"):
+        if "model" in self.__dict__:
             del self.model
 
     def set_mean_amp(self, v):
@@ -232,7 +243,7 @@ class TESSGP(BaseGP):
             # Note: MS granulation typically near/above Nyquist at 10-min cadence; this still lets data push to the cap.
             "G": [(log10_nu_res, log10_nu_nyq), (-6.0, 2.0)],
             # Seismic ν_max for MS is usually >> Nyquist at this cadence – allow same band but consider disabling 'S' for pure MS fits.
-            "S": [(log10_nu_res, log10_nu_nyq), (0.5, 20.0), (-6.0, 2.0)],
+            "S": [(log10_nu_res, log10_nu_nyq), self.seismic_quality_bounds, (-6.0, 2.0)],
             # Ellipsoidal: your kernel expects log10(ν_ellip [Hz]).
             # If you prefer to bound P_ellip instead, translate via log10(ν_ellip) = log10(2) - log10(P).
             # Here we simply constrain ν_ellip to the observable band:

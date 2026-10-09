@@ -186,6 +186,34 @@ FRAC_RANGES = {
 }
 
 
+# Broad coherent-p-mode modelling prior, not a calibrated population law.
+# Q ~= nu / linewidth for a narrow SHO resonance; observed linewidths vary
+# with temperature (https://arxiv.org/abs/1112.3295).
+SEISMIC_Q_BOUNDS = (100.0, 10_000.0)
+
+
+def sample_quality_factor(rng, *, bounds=SEISMIC_Q_BOUNDS, size=None):
+    """Draw seismic Q uniformly in log10(Q), using a caller-owned RNG."""
+    low, high = bounds
+    if not np.isfinite(low) or not np.isfinite(high) or low <= 0.5 or high <= low:
+        raise ValueError("Quality bounds must be finite, increasing, and above 0.5")
+    return 10.0 ** rng.uniform(np.log10(low), np.log10(high), size=size)
+
+
+def sample_log_sigma(logmu, tag, rng, *, ppm=None, size=None):
+    """Draw an amplitude uniformly in linear ppm, then convert to log counts.
+
+    Supply ppm to use an externally constrained component amplitude instead.
+    An observed total RMS alone cannot separate the GP components.
+    """
+    if ppm is None:
+        lo, hi = FRAC_RANGES[tag]
+        ppm = rng.uniform(1e6 * 10.0**lo, 1e6 * 10.0**hi, size=size)
+    if not np.all(np.isfinite(ppm)) or np.any(np.asarray(ppm) <= 0):
+        raise ValueError("Component amplitudes must be positive finite ppm")
+    return expected_log_sigma(logmu, tag, ppm=ppm)
+
+
 def expected_log_sigma(
     logmu: jnp.ndarray, tag: str, ppm: float | None = None
 ) -> jnp.ndarray:
@@ -383,7 +411,7 @@ def sample_physical(
                 if np.isfinite(Ms_est)
                 else -3.5
             )
-            Q = 5.0
+            Q = np.sqrt(np.prod(SEISMIC_Q_BOUNDS))
             lsig = (
                 float(expected_log_sigma(jnp.asarray(logmu), "S"))
                 if np.isfinite(logmu)
@@ -845,7 +873,7 @@ def make_data_anchors_from_psd(
     """
     Build a full (nhyp,) anchor vector for the given kernel_type using the data PSD:
       G → [log10 ν_g(knee), log10 σ_G]
-      S → [log10 ν_s(center), Q(=5), log10 σ_S]
+      S → [log10 ν_s(center), Q(prior geometric center), log10 σ_S]
       E → [log10 ν_e(peak),  log10 σ_E]
       F → [log10 τ_f ~ 2 hr, log10 σ_F]   (τ_f is a weak anchor, amplitude from μ/data)
 
@@ -883,7 +911,7 @@ def make_data_anchors_from_psd(
         if c == "G":
             anchors += [lnu_g, lsig_G]
         elif c == "S":
-            anchors += [lnu_s, 5.0, lsig_S]  # keep Q fixed at 5 for the anchor
+            anchors += [lnu_s, np.sqrt(np.prod(SEISMIC_Q_BOUNDS)), lsig_S]
         elif c == "E":
             anchors += [lnu_e, 20.0, lsig_E]
         elif c == "F":
