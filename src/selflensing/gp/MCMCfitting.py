@@ -149,6 +149,8 @@ def _log_posterior_single(
     combined_bounds: tuple[tuple[float, float], ...],
     include_lens_mean: int,
     mean_vals: jnp.ndarray | None = None,
+    lens_eccentricity=0.,
+    lens_periapsis_phase=0.,
 ) -> jnp.ndarray:
     """
     Single-point log-posterior: prior + GP likelihood.
@@ -188,6 +190,8 @@ def _log_posterior_single(
             include_lens_mean=include_lens_mean,
             noise_measure=noise_measure,
             mean_vals=mean_vals,
+            lens_eccentricity=lens_eccentricity,
+            lens_periapsis_phase=lens_periapsis_phase,
         )
         return lp + gp.log_probability(y)
 
@@ -215,10 +219,16 @@ def make_logposterior_fn(
     phys_scale: bool = False,
     include_lens_mean: bool = True,
     mean_vals: jnp.ndarray | None = None,
+    lens_eccentricity=0.,
+    lens_periapsis_phase=0.,
 ):
     """
     Factory returning a **JIT-compiled** single-point log-posterior:
         f(theta, T, y) -> scalar (jnp.ndarray)
+
+    Fixed eccentricity/periapsis may be supplied through lens_eccentricity
+    and lens_periapsis_phase; their defaults explicitly specify a circular mean.
+    The five legacy lens coordinates do not sample these two fixed parameters.
 
     This factory creates all static components (kernel, priors) *outside*
     the JIT boundary and passes them to the JIT-compiled function.
@@ -234,7 +244,8 @@ def make_logposterior_fn(
     # 3. Physical prior (if requested)
     if phys_scale:
         # This function must exist in PriorsSamplers.py
-        log_prior_phys_fn, _ = ps.make_log_prior_physical_jit(kernel_type)
+        log_prior_phys_fn, _ = ps.make_log_prior_physical_jit(
+            kernel_type, eccentricity=lens_eccentricity if include_lens_mean else None)
     else:
         log_prior_phys_fn = None
 
@@ -272,6 +283,8 @@ def make_logposterior_fn(
             combined_bounds=combined_bounds,
             include_lens_mean=int(bool(include_lens_mean)),
             mean_vals=mean_vals,
+            lens_eccentricity=lens_eccentricity,
+            lens_periapsis_phase=lens_periapsis_phase,
         )
 
     return _wrapped
@@ -287,6 +300,8 @@ def make_batched_logposterior_fn(
     phys_scale: bool = False,
     include_lens_mean: bool = True,
     mean_vals: jnp.ndarray | None = None,
+    lens_eccentricity=0.,
+    lens_periapsis_phase=0.,
 ):
     """
     Returns a **JIT-compiled** function evaluating the log-posterior for a *batch*
@@ -302,6 +317,8 @@ def make_batched_logposterior_fn(
         phys_scale=phys_scale,
         include_lens_mean=include_lens_mean,
         mean_vals=mean_vals,
+        lens_eccentricity=lens_eccentricity,
+        lens_periapsis_phase=lens_periapsis_phase,
     )
 
     @jax.jit
@@ -324,6 +341,8 @@ def make_emcee_vectorized_logprob(
     phys_scale: bool = False,
     include_lens_mean: bool = True,
     mean_vals: jnp.ndarray | None = None,
+    lens_eccentricity=0.,
+    lens_periapsis_phase=0.,
 ):
     """
     Convenience wrapper for emcee(vectorize=True).
@@ -339,6 +358,8 @@ def make_emcee_vectorized_logprob(
         phys_scale=phys_scale,
         include_lens_mean=include_lens_mean,
         mean_vals=mean_vals,
+        lens_eccentricity=lens_eccentricity,
+        lens_periapsis_phase=lens_periapsis_phase,
     )
 
     def logprob(thetas, T, y):

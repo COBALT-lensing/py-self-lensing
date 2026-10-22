@@ -20,6 +20,7 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 dependencies=[
+    "jaxoplanet==0.2.0",
     "astropy (>=7.1.0,<8.0.0)", 
     "numpy (>=2.3.0,<3.0.0)", 
     "gmpy2 (>=2.2.0,<3.0.0)",

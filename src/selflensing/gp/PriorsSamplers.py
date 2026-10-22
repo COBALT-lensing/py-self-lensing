@@ -267,7 +267,7 @@ def _kernel_hyper_indices(kernel_type: str):
     return idx_G, idx_S, idx_E, idx_F, i
 
 
-def make_log_prior_physical_jit(kernel_type: str, *, scale: float = 0.3):
+def make_log_prior_physical_jit(kernel_type: str, *, scale: float = 0.3, eccentricity=None):
     """
     Factory returning a **JIT-compiled** physical prior:
 
@@ -277,6 +277,8 @@ def make_log_prior_physical_jit(kernel_type: str, *, scale: float = 0.3):
       * No dicts or Python branching inside JIT; all layout resolved beforehand.
       * Uses jnp.where with finiteness guards so NaNs disable a term.
       * Wraps PhysicalRelations functions in tiny jitted helpers.
+      * The ellipsoidal 2/P frequency prior is enabled only when the caller
+        explicitly supplies eccentricity=0; unknown/eccentric cases skip it.
     """
     idx_G, idx_S, idx_E, idx_F, nhyp = _kernel_hyper_indices(kernel_type)
     has_G = idx_G[0] >= 0
@@ -354,7 +356,8 @@ def make_log_prior_physical_jit(kernel_type: str, *, scale: float = 0.3):
             lnu_e = th[i_lnu_e]
             lsig_e = th[i_lsig_e]
             loc_e = jnp.log10(jnp.array(2.0, dtype)) - logP_est
-            lp += jnp.where(logP_ok, jnorm.logpdf(lnu_e, loc=loc_e, scale=sc), zero)
+            lp += jnp.where(logP_ok & (eccentricity is not None and eccentricity == 0),
+                            jnorm.logpdf(lnu_e, loc=loc_e, scale=sc), zero)
             lp += jnp.where(
                 mu_ok,
                 jnorm.logpdf(lsig_e, loc=expected_log_sigma(logmu, "E"), scale=sc),
@@ -382,9 +385,12 @@ def sample_physical(
     logmu: float = np.nan,
     Ms_est: float = np.nan,
     logP_est: float = np.nan,
+    eccentricity: float | None = None,
 ) -> np.ndarray:
     """
     Deterministic kernel seeds placed at the *centers* of the physical priors.
+    The 2/P ellipsoidal anchor is used only for explicitly known e=0.
+    Unknown/eccentric systems get an unanchored frequency seed.
     """
     out = []
     for c in kernel_type:
@@ -420,7 +426,8 @@ def sample_physical(
             out += [lnu, Q, lsig]
 
         elif c == "E":
-            lnu = (np.log10(2.0) - float(logP_est)) if np.isfinite(logP_est) else -4.0
+            lnu = ((np.log10(2.0)-float(logP_est))
+                   if np.isfinite(logP_est) and eccentricity == 0 else -4.0)
             Q = 50.0
             lsig = (
                 float(expected_log_sigma(jnp.asarray(logmu), "E"))

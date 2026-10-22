@@ -13,6 +13,9 @@ from .gp.PhysicalRelations import (
 )
 from .gp.FluxFinderSensitivity import conv_mass_to_mag
 from .orbits import (
+    crossing_time_days,
+    mean_relative_speed_m_per_s,
+    relative_polar_velocity_m_per_s,
     einstein_radius_m,
     impact_parameter_source_radii,
     orbital_period_days,
@@ -174,14 +177,14 @@ class SelfLensingSystem(object):
     def i(self, i):
         self._i = i
         self.sin_i = numpy.sin(i)
-        # Calculate as per Wiktorowicz+2021. Keep the arithmetic numeric here so
-        # unxt quantities can be used inside JAX-traced likelihood functions.
-        b = numpy.abs(
-            _quantity_value(self.a, units.m)
-            * _quantity_value(numpy.cos(i))
-            / _quantity_value(self.rE(), units.m)
-        )
-        self._b = Quantity(b, units.dimensionless_unscaled)
+
+    @property
+    def _b(self):
+        # Derived on access: changing e, masses, a, or peri must not leave a cache.
+        radius = _quantity_value(self.rE(), units.m)
+        value = _quantity_value(self.b_source)*_quantity_value(self.Rcomp, units.m)
+        return Quantity(jnp.where(radius > 0, value/jnp.where(radius > 0, radius, 1.), jnp.inf),
+                        units.dimensionless_unscaled)
 
     @property
     def b_max(self):
@@ -199,7 +202,13 @@ class SelfLensingSystem(object):
 
     @property
     def sl_possible(self):
-        return self.b <= self.b_max
+        # For RE > 0, b <= b_max is equivalent to d <= Rcomp + RE,
+        # since b=d/RE and b_max=1+Rcomp/RE. Use physical distances to
+        # avoid division by zero, and reject RE=0 explicitly: otherwise
+        # both b and b_max can be infinite and inf <= inf would pass.
+        radius = _quantity_value(self.rE(), units.m)
+        return (radius > 0) & (_quantity_value(self.b_source)*_quantity_value(self.Rcomp, units.m)
+                               <= _quantity_value(self.Rcomp, units.m)+radius)
 
     @property
     def b_source(self):
@@ -211,6 +220,8 @@ class SelfLensingSystem(object):
             _quantity_value(self.a, units.m),
             _quantity_value(self.i, units.rad),
             _quantity_value(self.Rcomp, units.m),
+            _quantity_value(self.e),
+            _quantity_value(self.periapsis_phase, units.rad),
         )
         return Quantity(value, units.dimensionless_unscaled)
 
@@ -227,7 +238,8 @@ class SelfLensingSystem(object):
         """
         Given a phase angle, compute the distance of the lens from the centre of the disk.
 
-        When the lens is behind the star, assumes l is at its maximum.
+        Returns the full projected separation on either half-orbit; rE is
+        zero behind the source, and magnification is gated separately.
         """
         value = source_offset_source_radii(
             _quantity_value(phase, units.rad),
@@ -245,7 +257,7 @@ class SelfLensingSystem(object):
             _quantity_value(phase, units.rad),
             _quantity_value(self.a, units.m),
             _quantity_value(self.Rcomp, units.m),
-            _quantity_value(self.rE(), units.m),
+            _quantity_value(self.rE(phase), units.m),
             _quantity_value(self.e),
             _quantity_value(self.periapsis_phase, units.rad),
             _quantity_value(self.b_source),
@@ -262,7 +274,8 @@ class SelfLensingSystem(object):
     # @units.quantity_input
     def r(self, m: units.kg, phase: units.rad) -> units.m:
         """
-        The distance from the centre of mass of the object with mass 'm' at 'phase'
+        Barycentric distance of the body opposite mass m at phase.
+        Passing Mtot gives the relative binary separation.
         """
         value = orbital_separation_m(
             _quantity_value(phase, units.rad),
@@ -315,42 +328,31 @@ class SelfLensingSystem(object):
         )
         return Quantity(value, units.m)
 
+    def _crossing_time(self, include_einstein):
+        value = crossing_time_days(
+            _quantity_value(self.a, units.m), _quantity_value(self.i, units.rad),
+            _quantity_value(self.Macc, units.kg), _quantity_value(self.Mtot, units.kg),
+            _quantity_value(self.Rcomp, units.m), _quantity_value(self.e),
+            _quantity_value(self.periapsis_phase, units.rad), include_einstein=include_einstein)
+        return Quantity(value, units.day)
+
     @property
     def tau_eff(self):
+        """Local straight-track crossing of Rstar+RE; not a measured FWHM.
+
+        Uses the full eccentric sky velocity and local closest approach at the
+        longitude-zero epoch. Radius and velocity are frozen for this estimate.
         """
-        Effective crossing time as defined in Wiktorowicz, Grzegorz, Matthew Middleton,
-        Norman Khan, Adam Ingram, Poshak Gandhi, and Hugh Dickinson. ‘Predicting the
-        Self-Lensing Population in Optical Surveys’. Monthly Notices of the Royal
-        Astronomical Society 507, no. 1 (11 October 2021): 374–84.
-        https://doi.org/10.1093/mnras/stab2135.
-        """
-        porb = self.porb.decompose([]).value
-        rE = self.rE().decompose([]).value
-        Rcomp = self.Rcomp.decompose([]).value
-        a = self.a.decompose([]).value
-        b = self.b.decompose([]).value
-        b_max = self.b_max.decompose([]).value
-        sin_i = self.sin_i.decompose([]).value
-        return Quantity(
-            ((porb * (rE + Rcomp)) / (numpy.pi * a * sin_i))
-            * (1 - (b / b_max) ** 2) ** 0.5,
-            "s",
-        ).to(units.day)
+        return self._crossing_time(True)
 
     @property
     def tau_sl(self):
+        """Local stellar-disc crossing time for this orbit and inclination.
+
+        Replaces the former circular, orientation-averaged scaling. Non-crossing
+        tracks return NaN. No Einstein radius is added to the stellar boundary.
         """
-        Self-lensing duration as defined in Masuda, Kento, and Kenta Hotokezaka. ‘Prospects
-        of Finding Detached Black Hole–Star Binaries with TESS’. The Astrophysical Journal
-        883, no. 2 (2019): 169. https://doi.org/10.3847/1538-4357/ab3a4f.
-        """
-        # TODO: This can't be the correct way to handle the units...
-        Rcomp = self.Rcomp.to(units.R_sun).value
-        porb = self.porb.to(units.day).value
-        Mtot = self.Mtot.to(units.M_sun).value
-        return (
-            1.8 * units.hour * numpy.pi / 4 * porb ** (1 / 3) * Mtot ** (-1 / 3) * Rcomp
-        ).to(units.day)
+        return self._crossing_time(False)
 
     def time_to_l(self, time):
         return self.phase_to_l(self.time_to_phase(time))
@@ -375,14 +377,17 @@ class SelfLensingSystem(object):
 
     @units.quantity_input
     def v(self, m: units.kg, phase: units.rad) -> units.m / units.s:
+        """Barycentric speed for the body opposite mass m.
+
+        As with r(m), m is the OTHER body's mass. Passing Mtot gives the
+        relative two-body speed. Use v_acc/v_comp for named components.
         """
-        Orbital velocity.
-        """
-        v = (
-            (constants.G * self.Mtot)
-            * (2 / self.r(m, phase) - 1 / (self.a * m / self.Mtot))
-        ) ** 0.5
-        return v.to(units.m / units.s)
+        vr, vt = relative_polar_velocity_m_per_s(
+            _quantity_value(phase, units.rad), _quantity_value(self.a, units.m),
+            _quantity_value(self.Mtot, units.kg), _quantity_value(self.e),
+            _quantity_value(self.periapsis_phase, units.rad))
+        speed = jnp.hypot(vr, vt)*_quantity_value(m, units.kg)/_quantity_value(self.Mtot, units.kg)
+        return Quantity(speed, units.m/units.s)
 
     @units.quantity_input
     def v_tot(self, phase: units.rad) -> units.m / units.s:
@@ -390,18 +395,15 @@ class SelfLensingSystem(object):
 
     @units.quantity_input
     def v_acc(self, phase: units.rad) -> units.m / units.s:
-        return self.v(self.Macc, phase)
+        return self.v(self.Mcomp, phase)
 
     @property
     def v_avg(self):
-        return (2 * numpy.pi * self.a / self.porb).to(units.m / units.s)
+        """Time-average relative speed along the eccentric ellipse."""
+        return Quantity(mean_relative_speed_m_per_s(
+            _quantity_value(self.a, units.m), _quantity_value(self.Mtot, units.kg),
+            _quantity_value(self.e)), units.m/units.s)
 
     @units.quantity_input
     def v_comp(self, phase: units.rad):
-        # return self.v(self.Mcomp, phase)
-        velocity = (
-            constants.G.value
-            * _quantity_value(self.Macc, units.kg)
-            / _quantity_value(self.r_sep(phase), units.m)
-        ) ** 0.5
-        return Quantity(velocity, units.m / units.s)
+        return self.v(self.Macc, phase)

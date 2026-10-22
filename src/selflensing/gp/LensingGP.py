@@ -91,69 +91,24 @@ def run_nucs_jvp(primals, tangents):
 # Self-lensing mean function: μ taken from theta (log10 μ as last element)
 # ----------------------------------------------------------------------------
 @jax.jit
-def periodic_lensing_mean(pars: jnp.ndarray, T: jnp.ndarray) -> jnp.ndarray:
+def periodic_lensing_mean(pars: jnp.ndarray, T: jnp.ndarray, *,
+                          eccentricity=0., periapsis_phase=0.) -> jnp.ndarray:
+    """Physical self-lensing mean, with optional fixed eccentricity/periapsis.
+
+    Legacy layout: [Ms, Mco, log10(P seconds), inclination, epoch_phase, logmu].
+    epoch_phase shifts the longitude-zero epoch by epoch_phase*P/(2*pi), not
+    true anomaly linearly in time. Omitted eccentricity explicitly means e=0.
     """
-    Compute self-lensing mean flux time series.
-    (This version uses a simplified 'sawtooth' separation model
-     that produces ONE lensing peak per orbital period P)
-    """
-    # Unpack (ignore any trailing elements except the final logmu)
-    Ms, Mco, logP, inc, delta_true = pars[:5]
-    P = 10.0**logP  # seconds
-
-    # Masses -> SI
-    Mco_SI = Mco * M_sun
-    Ms_SI = Ms * M_sun
-
-    # Source radius from your physics (meters)
-    Rs = stellar_radius_m(Ms)
-
-    # Orbital geometry (SI) - still needed for R_E
-    a = ((G * (Mco_SI + Ms_SI) * P**2) / (4 * PI**2)) ** (1.0 / 3.0)  # [m]
-    sin_i = jnp.sin(inc)
-    R_E_squared = (4 * G * Mco_SI * a * sin_i) / (c**2)
-    R_E = jnp.sqrt(R_E_squared + 1e-30)  # [m]
-
-    # --- SAWTOOTH SEPARATION MODEL (Period P) ---
-
-    # Calculate time relative to start, shifted by phase offset
-    t_rel = T - T[0]
-    # Convert phase offset (radians) to time offset (seconds)
-    # delta_true = 0 should correspond to minimum separation (peak lensing)
-    delta_time = (delta_true / TWOPI) * P
-    # Apply shift (a positive delta_true shifts the peak later in time)
-    t_shifted = t_rel - delta_time  # SUBTRACT delta_time so peak aligns with phase=0
-
-    # Fold time into the interval [0, P)
-    t_mod = jnp.mod(t_shifted, P)
-
-    # Model separation 'u' as linearly increasing with folded time.
-    # We need a characteristic speed 'v'. Use orbital speed projection.
-    # Note: This 'v' is just a scaling factor for the sawtooth shape.
-    v_orb = TWOPI * a / P  # Approx orbital speed [m/s]
-    # Use sin(i) as an approximate projection factor
-    v_proj = v_orb * sin_i
-
-    # Dimensionless separation u(t) = (projected speed * folded time) / R_E
-    # This makes u=0 at t_mod=0 (phase=0), giving the lensing peak there.
-    u = (v_proj * t_mod) / R_E
-    u = jnp.nan_to_num(u, nan=1e6, posinf=1e6, neginf=1e6)
-    # --- END SAWTOOTH MODEL ---
-
-    # Magnification profile (fallbacks ensure numerically safe)
-    # Callback expects dimensionless separation 'u' and source radius 'Rs/R_E'
-    magn = run_nucs_callback(
-        u,  # <--- Dimensionless sep (sawtooth)
-        Rs / R_E,  # <--- Dimensionless source radius
-        Rs,  # <--- Source radius [m]
-        R_E,
-    )  # <--- Einstein radius [m]
-    magn = jnp.nan_to_num(magn, nan=1.0, posinf=1.0, neginf=1.0)
-    magn = jnp.clip(magn, a_min=1.0)
-
-    # Baseline μ from trailing log10 term
-    mu = 10.0 ** pars[-1]
-    return mu * magn
+    from ..lightcurves import self_lensing_amplification
+    from .PhysicalRelations import effective_temperature_K
+    Ms, Mco, logP, inc, epoch_phase = pars[:5]
+    period = 10.**logP
+    a = (G*(Mco+Ms)*M_sun*(period/(2*jnp.pi))**2)**(1/3)
+    row = jnp.stack([a/const.au.value, inc, Mco, Ms,
+                     stellar_radius_m(Ms)/R_sun, effective_temperature_K(Ms),
+                     jnp.asarray(eccentricity), jnp.asarray(periapsis_phase)])
+    epoch = T[0]+epoch_phase*period/(2*jnp.pi)
+    return 10.**pars[-1]*self_lensing_amplification((T-epoch)/86400, row, 0.)
 
 
 # ----------------------------------------------------------------------------
@@ -270,6 +225,8 @@ def build_model_additive(
     include_lens_mean: int = 1,
     noise_measure: float = 0.0,
     mean_vals: jnp.ndarray | None = None,
+    lens_eccentricity=0.,
+    lens_periapsis_phase=0.,
 ) -> GaussianProcess:
     """
     theta layout reminder (for any kernel_type):
@@ -280,7 +237,9 @@ def build_model_additive(
       converted to ω [rad/s] internally in the kernel builders.
     - The self-lensing mean uses:
         P = 10**logP [s], inc [rad], delta [rad], masses in Msun.
-      stellar_radius_m(Ms) supplies R_s [m] consistently with your physics.
+      stellar_radius_m(Ms) supplies R_s [m]. Fixed eccentricity and periapsis
+      are supplied through lens_eccentricity and lens_periapsis_phase; the
+      legacy five-parameter layout defaults explicitly to circular.
 
     noise_measure:
       - Interpreted as fractional white noise relative to μ (dimensionless).
@@ -300,7 +259,8 @@ def build_model_additive(
         lens_core = theta[nhyp : nhyp + 5]
         # Append logmu so periodic_lensing_mean can fetch μ consistently
         lens_params = jnp.concatenate([lens_core, jnp.atleast_1d(logmu)])
-        mean_vals = periodic_lensing_mean(lens_params, T)
+        mean_vals = periodic_lensing_mean(lens_params, T, eccentricity=lens_eccentricity,
+                                           periapsis_phase=lens_periapsis_phase)
     elif mean_vals is None:
         # No lensing mean; flat baseline
         mean_vals = mu * jnp.ones_like(T)

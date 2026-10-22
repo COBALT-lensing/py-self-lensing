@@ -37,31 +37,30 @@ def wm_callback(
     Offsets are passed in units of source radius (dimensionless).
     Returns unity profile on failure to keep GP stable.
     """
-    # bs = offsets / source_radius
-    if (
-        numpy.isnan(R_E_val)
-        or numpy.isnan(R_s_val)
-        or numpy.any(numpy.isnan(offsets))
-        or numpy.isinf(R_E_val)
-        or numpy.isinf(R_s_val)
-        or numpy.any(numpy.isinf(offsets))
-    ):
-        return numpy.ones_like(offsets)
-    try:
-        r = numpy.array(
-            rustlens.integrated_witt_mao_magnification(
-                offsets.tolist(),  # dimensionless impact parameters
-                float(R_E_val),  # Einstein radius [m]
-                float(R_s_val),  # source radius [m]
-            )
-        )
-        # print("Witt & Mao result:", min(r), max(r), r)
-        return r
-    # except Exception:
-    #     return np.ones_like(offsets)
-    except BaseException:
-        print("PANIC", R_E_val, R_s_val)  # , bs)
-        raise
+    return native_magnification_callback(offsets, R_s_val, R_E_val)
+
+
+def native_magnification_callback(offsets, rstar, re, method="integrated_witt_mao_magnification"):
+    """Evaluate RustLens with scalar or per-sample radii and foreground gating.
+
+    RustLens accepts one Einstein radius per call. The scalar-radius fast path
+    remains available; varying radii use individual calls with identical units.
+    Zero RE means no foreground lensing. Other invalid geometries return NaN.
+    """
+    offsets, rstar, re = numpy.broadcast_arrays(offsets, rstar, re)
+    valid = numpy.isfinite(offsets) & numpy.isfinite(rstar) & numpy.isfinite(re) & (rstar>0) & (re>=0)
+    result = numpy.full(offsets.shape, numpy.nan, dtype=offsets.dtype)
+    result[valid & (re==0)] = 1.
+    active = valid & (re>0)
+    if not numpy.any(active):
+        return result
+    function = getattr(rustlens, method)
+    if numpy.all(re[active]==re[active][0]) and numpy.all(rstar[active]==rstar[active][0]):
+        result[active] = function(offsets[active].tolist(), float(re[active][0]), float(rstar[active][0]))
+    else:
+        for index in zip(*numpy.nonzero(active)) if result.ndim else [()]:
+            result[index] = function([float(offsets[index])], float(re[index]), float(rstar[index]))[0]
+    return result
 
 
 def _theta_grid(dtype):
@@ -190,20 +189,18 @@ def integrated_witt_mao_magnification_jax(l, re, rstar):
     re = jnp.asarray(re, dtype=dtype)
     rstar = jnp.asarray(rstar, dtype=dtype)
 
+    l, re, rstar = jnp.broadcast_arrays(l, re, rstar)
+    shape = l.shape
     rstar_scaled = rstar / re
     l_scaled = l * rstar_scaled
     mu, weights = _brightness_grid(dtype)
     r = jnp.sqrt(1.0 - mu**2)
 
-    def integrate_one(l_scaled_i):
-        cumulative_flux = (
-            r**2 * _witt_mao_magnification_scaled(l_scaled_i, rstar_scaled * r)
-        )
-        full_flux = _witt_mao_magnification_scaled(l_scaled_i, rstar_scaled)
-        mag_int = jnp.pi * (
-            (1.0 - LD_COEFF) * full_flux
-            + LD_COEFF * jnp.sum(weights * cumulative_flux)
-        )
+    def integrate_one(inputs):
+        l_scaled_i, rstar_scaled_i = inputs
+        cumulative_flux = r**2 * _witt_mao_magnification_scaled(l_scaled_i, rstar_scaled_i*r)
+        full_flux = _witt_mao_magnification_scaled(l_scaled_i, rstar_scaled_i)
+        mag_int = jnp.pi * ((1.0-LD_COEFF)*full_flux + LD_COEFF*jnp.sum(weights*cumulative_flux))
         return mag_int / LD_LINEAR_INT
 
     valid = (
@@ -214,6 +211,6 @@ def integrated_witt_mao_magnification_jax(l, re, rstar):
         & (rstar > 0.0)
     )
     magnification = jax.lax.map(
-        integrate_one, l_scaled, batch_size=LENSING_TIME_BATCH_SIZE
-    )
+        integrate_one, (l_scaled.ravel(), rstar_scaled.ravel()), batch_size=LENSING_TIME_BATCH_SIZE
+    ).reshape(shape)
     return jnp.where(valid, magnification, jnp.nan)

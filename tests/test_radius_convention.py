@@ -58,10 +58,10 @@ def circular_case(a_au, lens_mass, radius_rsun):
         a**3 / (constants.G.value * (lens_mass + 1) * constants.M_sun.value)
     ) / 86400
     separations = np.array([0.5, 0.75, 1.5])
-    phase = np.arcsin(np.sqrt(separations**2 - 0.5**2) * radius / a)
+    phase = np.arcsin(np.sqrt(separations**2 - 0.5**2) * radius / (a*np.sin(inclination)))
     times = phase * period_days / (2*np.pi)
     params = np.array([a_au, inclination, lens_mass, 1., radius_rsun, 5800., 0., 0.])
-    return params, times, separations, re / radius
+    return params, times, separations, re*np.sqrt(np.cos(phase))/radius
 
 
 class RadiusConventionTest(unittest.TestCase):
@@ -71,7 +71,7 @@ class RadiusConventionTest(unittest.TestCase):
         cls.cases = [circular_case(*values) for values in
                      [(1., 10., 1.), (10., 10., 0.5), (30., 50., 1.)]]
         cls.expected = np.array([
-            [disc_magnification(s, q) for s in separations]
+            [disc_magnification(s, qi) for s, qi in zip(separations, q)]
             for _, _, separations, q in cls.cases
         ])
 
@@ -108,7 +108,7 @@ class RadiusConventionTest(unittest.TestCase):
                 assert_allclose(np.asarray(generator.amplification), expected,
                                 rtol=2e-5, atol=2e-5)
                 # The uniform-disc native method has no limb darkening.
-                uniform = [disc_magnification(s, q, gamma=0.) for s in separations]
+                uniform = [disc_magnification(s, qi, gamma=0.) for s, qi in zip(separations, q)]
                 assert_allclose(generator.witt_mao_amplification, uniform,
                                 rtol=1e-8, atol=1e-8)
 

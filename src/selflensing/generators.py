@@ -17,7 +17,7 @@ from .lightcurves import (
     radial_velocity_m_per_s,
     self_lensing_amplification,
 )
-from .lensing import LD_COEFF, wm_callback
+from .lensing import LD_COEFF, wm_callback, native_magnification_callback
 from .models import SelfLensingSystem, _quantity_value
 
 # from src.selflensing.gp.LensingGP import _run_nucs_safe
@@ -182,6 +182,9 @@ class FlatLightcurveGenerator(GeneratorBase):
             "b": float(self.lensing_system.b.value.astype(float)),
             "tau_eff": float(self.lensing_system.tau_eff.value.astype(float)),
             "tau_sl": float(self.lensing_system.tau_sl.value.astype(float)),
+            "orbit_geometry": "eccentric-observer-v2",
+            "epoch_definition": "orbital longitude zero",
+            "duration_definition": "local straight-track crossing; not FWHM",
             "peak_t": self.peak_time.jd,
         }
 
@@ -263,7 +266,9 @@ class EllipsoidalVariationsLightcurveGenerator(FlatLightcurveGenerator):
     Stellar-Compact Object Binary Systems for Mass Determinations’, The Astrophysical
     Journal 936, no. 1 (August 2022): 63, https://doi.org/10.3847/1538-4357/ac82b7.
 
-    With the addition of a variable orbital separation to account for eccentricity.
+    Uses the full quasi-static equilibrium-tide angular term and instantaneous
+    separation, retaining the circular normalization. Dynamic tides, rotation
+    and resonantly excited oscillations are not modelled.
     """
 
     # One day we could use the models from here:
@@ -386,57 +391,37 @@ class SelfLensingLightcurveGenerator(FlatLightcurveGenerator):
             ),
         )
 
+    def _native_amplification(self, method):
+        phase = self.lensing_system.time_to_phase(self.time_offsets)
+        offsets = self.lensing_system.phase_to_l(phase).value
+        re = self.lensing_system.rE(phase).to(units.m).value
+        rstar = self.lensing_system.Rcomp.to(units.m).value
+        return jax.pure_callback(
+            lambda l, rs, r_e: native_magnification_callback(l, rs, r_e, method),
+            jax.ShapeDtypeStruct(offsets.shape, offsets.dtype), offsets, rstar, re,
+            vmap_method="sequential")
+
     @property
     def heyrovsky_amplification(self):
-        return numpy.array(
-            rustlens.integrated_heyrovsky_magnification(
-                self.lensing_system.time_to_l(self.time_offsets),
-                self.lensing_system.rE().to(units.m).value,
-                self.lensing_system.Rcomp.to(units.m).value,
-            )
-        )
+        return self._native_amplification("integrated_heyrovsky_magnification")
+
+    @property
+    def integrated_heyrovsky_amplification(self):
+        return self.heyrovsky_amplification
 
     @property
     def integrated_witt_mao_amplification(self):
-        r_e_m = self.lensing_system.rE().to(units.m).value
-        rstar_m = self.lensing_system.Rcomp.to(units.m).value
-        # time_to_b returns d/RE; RustLens expects d/Rstar.
-        offsets = self.lensing_system.time_to_b(self.time_offsets) * (r_e_m / rstar_m)
-        out_shape = jax.ShapeDtypeStruct(offsets.shape, offsets.dtype)
-
-        # jax.debug.print("wm pre-callback")
-        r = jax.pure_callback(
-            wm_callback,
-            out_shape,
-            offsets,
-            rstar_m,
-            r_e_m,
-            vmap_method="sequential",
-        )
-        # jax.debug.print("wm final result: {r}", r=r)
-        return r
+        return self._native_amplification("integrated_witt_mao_magnification")
 
     @property
     def integrated_witt_mao_jax_amplification(self):
         return self_lensing_amplification(
-            _time_values_days(self.times),
-            _light_curve_params_from_system(self.lensing_system),
-            _peak_time_value_days(self.peak_time),
-        )
+            _time_values_days(self.times), _light_curve_params_from_system(self.lensing_system),
+            _peak_time_value_days(self.peak_time))
 
     @property
     def witt_mao_amplification(self):
-        r_e_m = self.lensing_system.rE().to(units.m).value
-        rstar_m = self.lensing_system.Rcomp.to(units.m).value
-        # time_to_b returns d/RE; RustLens expects d/Rstar.
-        offsets = self.lensing_system.time_to_b(self.time_offsets) * (r_e_m / rstar_m)
-        return numpy.array(
-            rustlens.witt_mao_magnification(
-                numpy.asarray(offsets).tolist(),
-                r_e_m,
-                rstar_m,
-            )
-        )
+        return self._native_amplification("witt_mao_magnification")
 
 
 class LightcurveGenerator(FlatLightcurveGenerator):
@@ -674,16 +659,21 @@ class RVGenerator(GeneratorBase):
         return unxt.Quantity(rv, self.units)
 
     @property
-    def rv_deriv(self):
-        """
-        Derivative of radial velocity.
-        """
+    def rv_phase_deriv(self):
+        """Derivative of source RV with respect to orbital longitude (m/s/rad)."""
         phases = self.phases()
-        phase_values = _quantity_value(phases, units.rad)
-        _, _, velocity_scale = self._source_polar_velocity_components(phases)
-        return unxt.Quantity(
-            velocity_scale
-            * jnp.cos(phase_values)
-            * _quantity_value(self.lensing_system.sin_i),
-            self.units,
-        )
+        _, _, scale = self._source_polar_velocity_components(phases)
+        return unxt.Quantity(scale*jnp.cos(_quantity_value(phases, units.rad))
+                             *_quantity_value(self.lensing_system.sin_i), self.units)
+
+    @property
+    def rv_deriv(self):
+        """Time derivative of source RV, in m/s^2 (not dRV/dlongitude)."""
+        from .orbits import relative_polar_velocity_m_per_s
+        phase = _quantity_value(self.phases(), units.rad)
+        system = self.lensing_system
+        _, vt = relative_polar_velocity_m_per_s(
+            phase, _quantity_value(system.a, units.m), _quantity_value(system.Mtot, units.kg),
+            _quantity_value(system.e), _quantity_value(system.periapsis_phase, units.rad))
+        omega = vt/_quantity_value(system.r_sep(unxt.Quantity(phase, units.rad)), units.m)
+        return unxt.Quantity(_quantity_value(self.rv_phase_deriv)*omega, units.m/units.s**2)

@@ -71,18 +71,25 @@ def granulation_frequency_relation(M_s):
 # ==========================
 # Ellipsoidal variability
 # ==========================
-def ellipsoidal_period_relation(logP):
-    """P_ellip = P/2. Input logP = log10(P [s]); output in seconds."""
-    P = 10.0 ** _af(logP)
-    return P / 2.0
+def ellipsoidal_period_relation(logP, eccentricity=0.):
+    """Repeat interval: P/2 for circular tides, orbital P for eccentric tides.
 
-def ellipsoidal_amplitude_relation(M_s, M_co, logP, inc_rad):
+    This is not a prediction of the dominant Fourier peak in an eccentric
+    system; multiple harmonics may be present. Input log10(P seconds).
     """
-    Dimensionless scaling: A ∝ (M_co * sin^2 i) / (P^{2/3} * M_s^{1/3})
-    (Morris 1985; Zucker et al. 2007)
-    """
-    M_s = _af(M_s)
-    M_co = _af(M_co)
     P = 10.0 ** _af(logP)
-    inc_rad = _af(inc_rad)
-    return (M_co * jnp.sin(inc_rad) ** 2) / (P ** (2.0 / 3.0) * M_s ** (1.0 / 3.0))
+    return jnp.where(jnp.asarray(eccentricity)==0, P/2, P)
+
+
+def ellipsoidal_amplitude_relation(M_s, M_co, logP, inc_rad,
+                                   eccentricity=0., true_anomaly=0.):
+    """Legacy proportional tidal scale, adjusted for instantaneous separation.
+
+    Retains the historical empirical P scaling (not a calibrated flux model).
+    For eccentric systems true_anomaly specifies the phase; its default zero
+    gives the pericenter scale. Use the deterministic EV model for photometry.
+    """
+    M_s, M_co, P = _af(M_s), _af(M_co), 10.0 ** _af(logP)
+    e = _af(eccentricity)
+    inverse_radius = (1+e*jnp.cos(true_anomaly))/((1-e)*(1+e))
+    return M_co*jnp.sin(inc_rad)**2/(P**(2/3)*M_s**(1/3))*inverse_radius**3

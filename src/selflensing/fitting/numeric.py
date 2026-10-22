@@ -4,7 +4,12 @@ from jax import numpy as jnp
 
 from ..gp.PhysicalRelations import effective_temperature_K
 from ..lightcurves import light_curve_flux, physical_parameters, radial_velocity_m_per_s
-from ..orbits import einstein_radius_m, orbital_period_days
+from ..orbits import (
+    crossing_time_days,
+    impact_parameter_source_radii,
+    einstein_radius_m,
+    orbital_period_days,
+)
 
 
 def parameter_row(fitted, mcomp, rcomp):
@@ -41,15 +46,12 @@ def physical_properties(params):
     r_e_m = einstein_radius_m(
         a_m, sin_i, macc_kg, eccentricity, periapsis_phase
     )
-    impact = a_m * jnp.abs(jnp.cos(inclination)) / r_e_m
+    impact = (impact_parameter_source_radii(a_m, inclination, rcomp_m, eccentricity, periapsis_phase)
+              * rcomp_m / jnp.where(r_e_m > 0, r_e_m, 1.))
     impact_limit = 1.0 + rcomp_m / r_e_m
     period_days = orbital_period_days(a_m, total_mass_kg)
-    tau_eff_days = (
-        period_days
-        * (r_e_m + rcomp_m)
-        / (jnp.pi * a_m * sin_i)
-        * jnp.sqrt(1.0 - (impact / impact_limit) ** 2)
-    )
+    tau_eff_days = crossing_time_days(a_m, inclination, macc_kg, total_mass_kg,
+                                      rcomp_m, eccentricity, periapsis_phase)
     feasible = (
         jnp.isfinite(r_e_m)
         & (r_e_m > 0)

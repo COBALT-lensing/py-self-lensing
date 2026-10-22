@@ -144,33 +144,17 @@ def self_lensing_amplification(times_days, params, peak_time_days=0.0):
         sin_i,
     ) = physical_parameters(params)
     phase = light_curve_phase(times_days, params, peak_time_days)
-    r_e_m = einstein_radius_m(a_m, sin_i, macc_kg, e, periapsis_phase)
-    b_source = impact_parameter_source_radii(a_m, i, rcomp_m)
-    offsets = source_offset_einstein_radii(
-        phase,
-        a_m,
-        rcomp_m,
-        r_e_m,
-        e,
-        periapsis_phase,
-        b_source,
-    )
-    # Keep orbital offsets in Einstein radii, but the finite-source interface
-    # expects source radii and converts to Einstein radii internally.
-    offsets_source_radii = offsets * (r_e_m / rcomp_m)
+    r_e_m = einstein_radius_m(a_m, sin_i, macc_kg, e, periapsis_phase, phase)
+    b_source = impact_parameter_source_radii(a_m, i, rcomp_m, e, periapsis_phase)
+    # Use source-radius geometry directly; pass safe radii for masked samples
+    # so the quadrature never divides by a zero rear-half-orbit Einstein radius.
+    from .orbits import source_offset_source_radii
+    offsets = source_offset_source_radii(phase, a_m, rcomp_m, e, periapsis_phase, b_source)
+    front = r_e_m > 0
     amplification = integrated_witt_mao_magnification_jax(
-        offsets_source_radii,
-        r_e_m,
-        rcomp_m,
-    )
-    valid = (
-        jnp.isfinite(r_e_m)
-        & (r_e_m > 0)
-        & jnp.isfinite(rcomp_m)
-        & (rcomp_m > 0)
-        & jnp.all(jnp.isfinite(offsets))
-    )
-    return jnp.where(valid, amplification, jnp.ones_like(times_days))
+        offsets, jnp.where(front, r_e_m, rcomp_m), rcomp_m)
+    valid = jnp.isfinite(rcomp_m) & (rcomp_m>0) & jnp.isfinite(r_e_m) & jnp.isfinite(offsets)
+    return jnp.where(valid, jnp.where(front, amplification, 1.), jnp.nan)
 
 
 def ellipsoidal_variations_amplification(times_days, params, peak_time_days=0.0):
@@ -189,13 +173,12 @@ def ellipsoidal_variations_amplification(times_days, params, peak_time_days=0.0)
     ) = physical_parameters(params)
     phase = light_curve_phase(times_days, params, peak_time_days)
     r_sep_m = orbital_separation_m(phase, a_m, e, periapsis_phase)
-    return (
-        -_EV_BETA
-        * (macc_kg / mcomp_kg)
-        * (rcomp_m / r_sep_m) ** 3
-        * sin_i**2
-        * jnp.cos(2 * phase)
-    )
+    # Equilibrium-tide (Kumar-style) geometry: the axisymmetric term also
+    # varies on an eccentric orbit. Subtract the circular reference offset so
+    # e=0 retains the historical -beta*q*(R/a)^3*sin(i)^2*cos(2*longitude).
+    scale = _EV_BETA * (macc_kg/mcomp_kg) * (rcomp_m/a_m)**3
+    angular = 2/3 - sin_i**2 - sin_i**2*jnp.cos(2*phase)
+    return scale * ((a_m/r_sep_m)**3*angular - (2/3-sin_i**2))
 
 
 def radial_velocity_m_per_s(times_days, params, peak_time_days=0.0):

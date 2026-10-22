@@ -331,7 +331,7 @@ class BatchLightCurveTest(unittest.TestCase):
         sin_i = sls.sin_i.value
         eccentricity = sls.e.value
         periapsis_phase = sls.periapsis_phase.to(units.rad).value
-        b_source = impact_parameter_source_radii(a_m, sls.i.value, rcomp_m)
+        b_source = impact_parameter_source_radii(a_m, sls.i.value, rcomp_m, eccentricity, periapsis_phase)
 
         assert_allclose(
             sls.porb.value,
@@ -378,7 +378,7 @@ class BatchLightCurveTest(unittest.TestCase):
                 phase,
                 a_m,
                 rcomp_m,
-                sls.rE().to(units.m).value,
+                sls.rE(phase * units.rad).to(units.m).value,
                 eccentricity,
                 periapsis_phase,
                 b_source,

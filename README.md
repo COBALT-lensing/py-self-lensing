@@ -2,7 +2,12 @@
 
 A Python module for generating and fitting light curves and radial velocity time series for self-lensing binaries. Includes three effects in light curves: self-lensing, Doppler boosting, and ellipsoidal variations. 
 
-The effect of eccentricity is included in both RV and light curves, **except** for the effect this has to change the magnification during self-lensing. Eccentricity is correctly considered when working out the distance between the lens and the source at the mid-point of the event, but at the moment we don't vary this distance in the calculations even though it would technically change continuously in an eccentric system (in other words the mid-point distance is used for the whole event). The distance is varied continuously for ellipsoidal variations, however.
+Bound eccentric orbits use jaxoplanet's Kepler solver and shared observer-frame
+geometry in both native and JAX light curves. Projected separation and the
+foreground line-of-sight Einstein radius vary throughout the orbit; a lens
+behind the source produces no magnification. See [eccentric-orbit conventions
+and migration notes](ECCENTRIC_ORBITS.md) for changed duration/velocity semantics,
+reference epochs, remaining physical approximations, and validation.
 
 ## Installing
 

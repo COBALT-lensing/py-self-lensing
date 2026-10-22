@@ -62,7 +62,7 @@ def estimate_lensing(min_mag, max_mag, Rcomp):
 
         rE_match = rE[match_idx[0]]
         l_match = l[match_idx[1]]
-        b_match = l_match / (rE_match * Rcomp)
+        b_match = l_match * Rcomp / rE_match
 
         rE_out.append(rE_match)
         b_out.append(b_match)
@@ -70,34 +70,71 @@ def estimate_lensing(min_mag, max_mag, Rcomp):
     return numpy.concat(rE_out), numpy.concat(b_out)
 
 
-def calc_a(rE):
-    x = (rE**2 * constants.c**2) / (4 * constants.G)
-    a_min = x / LENS_MASS_MAX
-    a_max = x / LENS_MASS_MIN
+def _astropy_quantity(value, unit):
+    """Normalize astropy/unxt values before mixing with Astropy constants."""
+    converted = value.to(unit)
+    return numpy.asarray(converted.value)*unit
+
+
+def _separation_factor(e, periapsis_phase):
+    e = numpy.asarray(e)
+    if numpy.any(~numpy.isfinite(e)) or numpy.any((e<0) | (e>=1)):
+        raise ValueError("Eccentricity must lie in [0, 1)")
+    return (1-e)*(1+e)/(1+e*numpy.cos(periapsis_phase))
+
+
+def calc_a(rE, *, b=0., e=0., periapsis_phase=0.):
+    """Mass-limited a range from conjunction RE and impact d/RE.
+
+    The keyword defaults explicitly specify an edge-on circular orbit. For
+    eccentric systems r0=a*(1-e^2)/(1+e*cos(periapsis_phase)).
+    """
+    rE = _astropy_quantity(rE, units.m)
+    factor = _separation_factor(e, periapsis_phase)
+    z_mass = rE**2*constants.c**2/(4*constants.G)
+    transverse = b*rE
+    a_min = numpy.sqrt((z_mass/LENS_MASS_MAX)**2+transverse**2)/factor
+    a_max = numpy.sqrt((z_mass/LENS_MASS_MIN)**2+transverse**2)/factor
     return a_min.to(units.au), a_max.to(units.au)
 
 
-def calc_porb(a, b, rE, Rcomp, tau_eff):
+def calc_porb(a, b, rE, Rcomp, tau_eff, *, e=0., periapsis_phase=0.):
+    """Invert the local eccentric crossing estimate (not an FWHM).
+
+    b is the longitude-zero offset in Einstein radii. This inversion must use
+    the same epoch, boundary and straight-track convention as tau_eff.
     """
-    Using some trig identities to eliminate sin i from the below
+    a = _astropy_quantity(a, units.m)
+    rE = _astropy_quantity(rE, units.m)
+    Rcomp = _astropy_quantity(Rcomp, units.m)
+    tau_eff = _astropy_quantity(tau_eff, units.day)
+    factor = _separation_factor(e, periapsis_phase)
+    radius0 = a*factor
+    cos_i = (b*rE/radius0).to_value(units.one)
+    transverse = 1+e*numpy.cos(periapsis_phase)
+    radial_y = e*numpy.sin(periapsis_phase)*cos_i
+    speed_factor = numpy.hypot(transverse, radial_y)/numpy.sqrt((1-e)*(1+e))
+    closest = b*rE*transverse/numpy.hypot(transverse, radial_y)
+    chord = 2*numpy.sqrt((rE+Rcomp)**2-closest**2)
+    period = tau_eff*2*numpy.pi*a*speed_factor/chord
+    return numpy.where(numpy.abs(cos_i)<1, period.to_value(units.day), numpy.nan)*units.day
+
+
+def calc_mass(rE, a, *, b=0., e=0., periapsis_phase=0.):
+    """Lens mass using the foreground line-of-sight separation at the epoch."""
+    rE = _astropy_quantity(rE, units.m)
+    a = _astropy_quantity(a, units.m)
+    radius0 = a*_separation_factor(e, periapsis_phase)
+    z = numpy.sqrt(radius0**2-(b*rE)**2)
+    return rE**2*constants.c**2/(4*constants.G*z)
+
+
+def estimate_porb(tau_eff, min_mag, max_mag, Rcomp, *, e=0., periapsis_phase=0.):
+    """Conditional period estimate for specified e/peri; omitted values mean circular.
+
+    Uses a uniform-disc magnification grid and a local crossing-time estimate,
+    not measured FWHM. Unknown e/peri require an explicit external prior.
     """
-    return (
-        (tau_eff / numpy.sqrt(1 - ((b * rE) / (1 * Rcomp.unit + Rcomp)) ** 2))
-        * (numpy.pi / (rE + Rcomp))
-        * (
-            a
-            * numpy.sin(  # sin i
-                (0.5 * numpy.pi) * units.rad - numpy.arcsin((b * rE) / a)
-            )
-        )
-    )
-
-
-def calc_mass(rE, a):
-    return (rE**2 * constants.c**2) / (4 * constants.G * a)
-
-
-def estimate_porb(tau_eff, min_mag, max_mag, Rcomp):
     rE, b = estimate_lensing(min_mag, max_mag, Rcomp.to(units.R_sun).value)
     rE *= units.R_sun
     b_max = 1 + Rcomp / rE
@@ -105,7 +142,7 @@ def estimate_porb(tau_eff, min_mag, max_mag, Rcomp):
 
     rE = rE[b_mask]
     b = b[b_mask]
-    a_min, a_max = calc_a(rE)
+    a_min, a_max = calc_a(rE, b=b, e=e, periapsis_phase=periapsis_phase)
 
     PDIST_SAMPLES = 1000
 
@@ -135,14 +172,16 @@ def estimate_porb(tau_eff, min_mag, max_mag, Rcomp):
         # Then use those samples to weight the calculated porbs.
         # Then change the bin_prob calculation below to just sum the weighted porbs.
         # Finally return a differential density distribution for the porbs.
-        mass_samples = calc_mass(_rE, a_samples)
+        mass_samples = calc_mass(_rE, a_samples, b=_b, e=e, periapsis_phase=periapsis_phase)
         new_pdist = lens_mass_pdist(mass_samples)
         pdist = numpy.append(pdist, new_pdist)
-        porbs = numpy.append(porbs, calc_porb(a_samples, _b, _rE, Rcomp, tau_eff))
+        porbs = numpy.append(porbs, calc_porb(a_samples, _b, _rE, Rcomp, tau_eff,
+                                                e=e, periapsis_phase=periapsis_phase))
     # print(len(pdist), len(numpy.unique(pdist)), pdist[:100])
     print(porbs)
 
-    porbs = porbs[~numpy.isnan(porbs)]
+    finite = numpy.isfinite(porbs)
+    porbs, pdist = porbs[finite], pdist[finite]
     porb_min_bin = numpy.floor(numpy.log10(numpy.min(porbs).value)) * porbs.unit
     porb_max_bin = numpy.ceil(numpy.log10(numpy.max(porbs).value)) * porbs.unit
     porb_bins = numpy.logspace(porb_min_bin.value, porb_max_bin.value, 100) * porbs.unit

@@ -52,7 +52,8 @@ class WittMaoJaxTest(unittest.TestCase):
         single = jax.jit(lambda offset, re:
             integrated_witt_mao_magnification_jax(offset[None], re, 1.)[0])
         expected = np.array([[single(offset, re) for offset in offsets] for re in radii])
-        assert_allclose(actual, expected, rtol=1e-12, atol=1e-12)
+        # Per-sample radius mapping changes fusion and roundoff by ~4e-12.
+        assert_allclose(actual, expected, rtol=1e-11, atol=1e-11)
         self.assertTrue(np.isfinite(actual).all())
 
     def test_witt_mao_can_be_jitted(self):
