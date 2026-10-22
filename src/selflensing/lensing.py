@@ -155,7 +155,11 @@ def _witt_mao_magnification_scaled(l_scaled, rstar_scaled):
 
 
 def witt_mao_magnification_jax(l, re, rstar):
-    """JAX-compatible approximation of RustLens' Witt-Mao magnification."""
+    """Uniform-disc magnification; ``l=d/Rstar``, radii in matching units.
+
+    Like RustLens, this interface takes separation in source radii, not
+    Einstein radii. It converts to Einstein radii internally.
+    """
     l = jnp.asarray(l)
     dtype = l.dtype
     re = jnp.asarray(re, dtype=dtype)
@@ -176,7 +180,11 @@ def witt_mao_magnification_jax(l, re, rstar):
 
 
 def integrated_witt_mao_magnification_jax(l, re, rstar):
-    """JAX-native integrated Witt-Mao magnification."""
+    """Limb-darkened magnification; ``l=d/Rstar``, radii in matching units.
+
+    Like RustLens, this interface takes separation in source radii, not
+    Einstein radii. It converts to Einstein radii internally.
+    """
     l = jnp.asarray(l)
     dtype = l.dtype
     re = jnp.asarray(re, dtype=dtype)

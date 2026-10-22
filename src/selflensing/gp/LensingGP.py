@@ -62,15 +62,18 @@ def run_nucs_callback(
     offsets: jnp.ndarray, source_radius: float, R_s_val: float, R_E_val: float
 ) -> jnp.ndarray:
     """
-    JAX-compatible wrapper for RustLens magnification.
+    JAX-compatible wrapper for Einstein-radius offsets and source size.
+
+    ``offsets`` is d/RE, ``source_radius`` is Rstar/RE, and ``R_s_val`` and
+    ``R_E_val`` are physical radii in matching units. Convert the offsets to
+    source radii before calling the three-argument RustLens wrapper.
     Note: we treat it as non-differentiable (zero tangent below).
     """
     out_shape = jax.ShapeDtypeStruct(offsets.shape, offsets.dtype)
     return jax.pure_callback(
         wm_callback,
         out_shape,
-        offsets,
-        source_radius,
+        offsets / source_radius,
         R_s_val,
         R_E_val,
         vmap_method="sequential",

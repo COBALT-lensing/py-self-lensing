@@ -208,7 +208,11 @@ class NumericLikelihoodTest(unittest.TestCase):
                 for fit in range(2)
             ]
         )
-        assert_allclose(actual, expected, rtol=1e-12, atol=1e-12)
+        # Nested batched/JIT and quantity-aware evaluation reorder floating-point
+        # operations in the finite-source quadrature. With the corrected, larger
+        # lensing signal the observed log-likelihood rounding is about 1.3e-11
+        # relative (4.4e-9 absolute); do not require bit-level agreement here.
+        assert_allclose(actual, expected, rtol=1e-10, atol=1e-10)
 
     def test_batched_blackjax_uses_numeric_likelihood_with_retained_samples(self):
         systems, samplers, walker_state = self_lensing_systems_from_batched_fit_blackjax(

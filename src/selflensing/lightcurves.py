@@ -155,8 +155,11 @@ def self_lensing_amplification(times_days, params, peak_time_days=0.0):
         periapsis_phase,
         b_source,
     )
+    # Keep orbital offsets in Einstein radii, but the finite-source interface
+    # expects source radii and converts to Einstein radii internally.
+    offsets_source_radii = offsets * (r_e_m / rcomp_m)
     amplification = integrated_witt_mao_magnification_jax(
-        offsets,
+        offsets_source_radii,
         r_e_m,
         rcomp_m,
     )

@@ -398,7 +398,10 @@ class SelfLensingLightcurveGenerator(FlatLightcurveGenerator):
 
     @property
     def integrated_witt_mao_amplification(self):
-        offsets = self.lensing_system.time_to_b(self.time_offsets)
+        r_e_m = self.lensing_system.rE().to(units.m).value
+        rstar_m = self.lensing_system.Rcomp.to(units.m).value
+        # time_to_b returns d/RE; RustLens expects d/Rstar.
+        offsets = self.lensing_system.time_to_b(self.time_offsets) * (r_e_m / rstar_m)
         out_shape = jax.ShapeDtypeStruct(offsets.shape, offsets.dtype)
 
         # jax.debug.print("wm pre-callback")
@@ -406,21 +409,12 @@ class SelfLensingLightcurveGenerator(FlatLightcurveGenerator):
             wm_callback,
             out_shape,
             offsets,
-            self.lensing_system.Rcomp.to(units.m).value,
-            self.lensing_system.rE().to(units.m).value,
+            rstar_m,
+            r_e_m,
             vmap_method="sequential",
         )
         # jax.debug.print("wm final result: {r}", r=r)
         return r
-
-        # return jnp.array(
-        #     rustlens.integrated_witt_mao_magnification(
-        #         self.lensing_system.time_to_b(self.time_offsets),
-        #         self.lensing_system.rE().to(units.m).value.astype(float),
-        #         self.lensing_system.Rcomp.to(units.m).value.astype(float),
-        #     ),
-        #     float,
-        # )
 
     @property
     def integrated_witt_mao_jax_amplification(self):
@@ -432,11 +426,15 @@ class SelfLensingLightcurveGenerator(FlatLightcurveGenerator):
 
     @property
     def witt_mao_amplification(self):
+        r_e_m = self.lensing_system.rE().to(units.m).value
+        rstar_m = self.lensing_system.Rcomp.to(units.m).value
+        # time_to_b returns d/RE; RustLens expects d/Rstar.
+        offsets = self.lensing_system.time_to_b(self.time_offsets) * (r_e_m / rstar_m)
         return numpy.array(
             rustlens.witt_mao_magnification(
-                self.lensing_system.time_to_b(self.time_offsets),
-                self.lensing_system.rE().to(units.m).value,
-                self.lensing_system.Rcomp.to(units.m).value,
+                numpy.asarray(offsets).tolist(),
+                r_e_m,
+                rstar_m,
             )
         )
 
