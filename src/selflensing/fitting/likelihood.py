@@ -40,6 +40,7 @@ def combined_chi2(
     rv_mask=None,
     lc_mask=None,
     peak_time_prior_sigma=None,
+    rv_source_ids=None,
 ):
     """Compute log-likelihood for self-lensing binary parameters.
 
@@ -207,6 +208,7 @@ def combined_chi2(
                     observed_rv_err.to(units.m / units.s).value,
                     rv_gen.rv.to(units.m / units.s).value,
                     rv_mask,
+                    rv_source_ids,
                 )
 
             def calc_lc_chi2():
@@ -314,18 +316,45 @@ def chi2_masked(obs, obs_err, model, mask=None):
     return -jnp.sum(weight * (obs - model) ** 2 / obs_err**2)
 
 
-def profiled_rv_chi2(obs, obs_err, orbital_model, mask=None):
-    """RV chi squared after profiling a constant systemic velocity."""
-    weight = 1.0 / obs_err**2
-    if mask is not None:
-        weight = weight * jnp.asarray(mask, dtype=bool).astype(float)
-    weight_sum = jnp.sum(weight)
-    systemic_velocity = jnp.where(
-        weight_sum > 0,
-        jnp.sum(weight * (obs - orbital_model)) / weight_sum,
-        0.0,
-    )
-    return -jnp.sum(weight * (obs - orbital_model - systemic_velocity) ** 2)
+def _prepare_rv_source_ids(source_ids, observed_rv):
+    """Validate per-observation labels and encode dense IDs per fit before JIT."""
+    if source_ids is None:
+        return None
+    labels = numpy.asarray(source_ids)
+    if observed_rv is None or labels.shape != numpy.shape(observed_rv):
+        raise ValueError("rv_source_ids must have the same shape as observed_rv")
+    if labels.ndim not in (1, 2):
+        raise ValueError("rv_source_ids must be one- or two-dimensional")
+    if labels.ndim == 1:
+        return numpy.unique(labels, return_inverse=True)[1].astype(numpy.int32)
+    return numpy.asarray([
+        numpy.unique(row, return_inverse=True)[1] for row in labels
+    ], dtype=numpy.int32)
+
+
+def profiled_rv_chi2(obs, obs_err, orbital_model, mask=None, source_ids=None):
+    """Negative RV chi squared after profiling one constant offset per source.
+
+    ``source_ids`` are dense nonnegative integers smaller than the observation
+    count, as produced by the likelihood builders. None retains one shared
+    offset. Masked points contribute neither to offsets nor to chi squared.
+    A source with one unmasked observation contributes zero chi squared.
+    """
+    active = jnp.ones_like(obs, dtype=bool) if mask is None else jnp.asarray(mask, dtype=bool)
+    error = jnp.where(active, obs_err, 1.0)
+    weight = jnp.where(active, 1.0 / error**2, 0.0)
+    residual = jnp.where(active, obs - orbital_model, 0.0)
+    if source_ids is None:
+        weight_sum = jnp.sum(weight)
+        systemic_velocity = jnp.sum(weight * residual) / jnp.where(weight_sum > 0, weight_sum, 1.0)
+    else:
+        ids = jax_numpy.asarray(source_ids, dtype=jax_numpy.int32)
+        weight_sum = jax.ops.segment_sum(weight, ids, num_segments=obs.shape[0])
+        residual_sum = jax.ops.segment_sum(weight * residual, ids, num_segments=obs.shape[0])
+        offsets = residual_sum / jnp.where(weight_sum > 0, weight_sum, 1.0)
+        systemic_velocity = offsets[ids]
+    centered = jnp.where(active, residual - systemic_velocity, 0.0)
+    return -jnp.sum(weight * centered**2)
 
 
 def numeric_combined_chi2(
@@ -346,6 +375,7 @@ def numeric_combined_chi2(
     period_max=None,
     rv_mask=None,
     lc_mask=None,
+    rv_source_ids=None,
 ):
     """Object-free deterministic equivalent of :func:`combined_chi2`.
 
@@ -378,7 +408,7 @@ def numeric_combined_chi2(
     result = bounds
     if observed_rv is not None:
         result = result + profiled_rv_chi2(
-            observed_rv, observed_rv_err, model_rv, rv_mask
+            observed_rv, observed_rv_err, model_rv, rv_mask, rv_source_ids
         )
     if observed_lc is not None:
         if center_lc_model:
@@ -429,6 +459,7 @@ def make_combined_chi2_vec(
     period_max=None,
     model_sls=None,
     device=None,
+    rv_source_ids=None,
 ):
     # Strip astropy units at Python level (before JIT tracing) to enable
     # better compiler optimization and reduce tracer overhead.
@@ -441,6 +472,8 @@ def make_combined_chi2_vec(
     tau_eff = _extract_value(tau_eff)
     d = _extract_value(d)
     observed_rv = _extract_value(observed_rv)
+    rv_source_ids = _prepare_rv_source_ids(rv_source_ids, observed_rv)
+    rv_source_ids = _device_array(rv_source_ids, device)
     observed_rv_err = _extract_value(observed_rv_err)
     observed_lc = _extract_value(observed_lc)
     observed_lc_err = _extract_value(observed_lc_err)
@@ -482,6 +515,7 @@ def make_combined_chi2_vec(
                     period_min,
                     period_max,
                     model_sls,
+                    rv_source_ids=rv_source_ids,
                 )
             )(params)
         )
@@ -542,6 +576,7 @@ def make_combined_chi2_vec_jax(
     model_sls=None,
     device=None,
     peak_time_prior_sigma=None,
+    rv_source_ids=None,
 ):
     """Build a JAX-native vectorized log-probability function.
 
@@ -557,6 +592,8 @@ def make_combined_chi2_vec_jax(
     tau_eff = _extract_value(tau_eff)
     d = _extract_value(d)
     observed_rv = _extract_value(observed_rv)
+    rv_source_ids = _prepare_rv_source_ids(rv_source_ids, observed_rv)
+    rv_source_ids = _device_array(rv_source_ids, device)
     observed_rv_err = _extract_value(observed_rv_err)
     observed_lc = _extract_value(observed_lc)
     observed_lc_err = _extract_value(observed_lc_err)
@@ -599,6 +636,7 @@ def make_combined_chi2_vec_jax(
                     period_min,
                     period_max,
                     model_sls,
+                    rv_source_ids=rv_source_ids,
                     peak_time_prior_sigma=peak_time_prior_sigma,
                 )
             )(params)
@@ -636,6 +674,7 @@ def make_batched_combined_chi2_vec_jax(
     rv_mask=None,
     lc_mask=None,
     device=None,
+    rv_source_ids=None,
 ):
     """Build a JAX-native batched log-probability function.
 
@@ -651,6 +690,8 @@ def make_batched_combined_chi2_vec_jax(
     tau_eff = _extract_value(tau_eff)
     d = _extract_value(d)
     observed_rv = _extract_value(observed_rv)
+    rv_source_ids = _prepare_rv_source_ids(rv_source_ids, observed_rv)
+    rv_source_ids = _device_array(rv_source_ids, device)
     observed_rv_err = _extract_value(observed_rv_err)
     observed_lc = _extract_value(observed_lc)
     observed_lc_err = _extract_value(observed_lc_err)
@@ -694,6 +735,7 @@ def make_batched_combined_chi2_vec_jax(
         row_detected_periods,
         row_rv_mask,
         row_lc_mask,
+        row_rv_source_ids,
     ):
         return jnp.asarray(
             jax.vmap(
@@ -719,6 +761,7 @@ def make_batched_combined_chi2_vec_jax(
                     model_sls,
                     row_rv_mask,
                     row_lc_mask,
+                    rv_source_ids=row_rv_source_ids,
                 )
             )(params)
         )
@@ -744,6 +787,7 @@ def make_batched_combined_chi2_vec_jax(
                     detected_periods,
                     rv_mask,
                     lc_mask,
+                    rv_source_ids,
                 )
                 if has_tau_eff
                 else jax.vmap(
@@ -760,7 +804,8 @@ def make_batched_combined_chi2_vec_jax(
                     row_observed_lc_err,
                     row_detected_periods,
                     row_rv_mask,
-                    row_lc_mask: _row_chi2_vec(
+                    row_lc_mask,
+                    row_rv_source_ids: _row_chi2_vec(
                         row_params,
                         row_Mcomp,
                         row_Rcomp,
@@ -776,6 +821,7 @@ def make_batched_combined_chi2_vec_jax(
                         row_detected_periods,
                         row_rv_mask,
                         row_lc_mask,
+                        row_rv_source_ids,
                     )
                 )(
                     params,
@@ -792,6 +838,7 @@ def make_batched_combined_chi2_vec_jax(
                     detected_periods,
                     rv_mask,
                     lc_mask,
+                    rv_source_ids,
                 )
             )
         )
@@ -823,8 +870,10 @@ def make_batched_numeric_combined_chi2_vec_jax(
     rv_mask=None,
     lc_mask=None,
     device=None,
+    rv_source_ids=None,
 ):
     """Build the numeric likelihood used exclusively by batched BlackJAX fits."""
+    rv_source_ids = _prepare_rv_source_ids(rv_source_ids, _extract_value(observed_rv))
     values = [
         Mcomp,
         Rcomp,
@@ -839,6 +888,7 @@ def make_batched_numeric_combined_chi2_vec_jax(
         detected_periods,
         rv_mask,
         lc_mask,
+        rv_source_ids,
     ]
     (
         Mcomp,
@@ -854,6 +904,7 @@ def make_batched_numeric_combined_chi2_vec_jax(
         detected_periods,
         rv_mask,
         lc_mask,
+        rv_source_ids,
     ) = [_device_array(_extract_value(value), device) for value in values]
 
     def row_logprob(
@@ -871,6 +922,7 @@ def make_batched_numeric_combined_chi2_vec_jax(
         row_detected_periods,
         row_rv_mask,
         row_lc_mask,
+        row_rv_source_ids,
     ):
         return jax.vmap(
             lambda walker: numeric_combined_chi2(
@@ -891,6 +943,7 @@ def make_batched_numeric_combined_chi2_vec_jax(
                 period_max,
                 row_rv_mask,
                 row_lc_mask,
+                rv_source_ids=row_rv_source_ids,
             )
         )(row_params)
 
@@ -913,6 +966,7 @@ def make_batched_numeric_combined_chi2_vec_jax(
                 detected_periods,
                 rv_mask,
                 lc_mask,
+                rv_source_ids,
             )
         return jax.vmap(row_logprob)(
             params,
@@ -929,6 +983,7 @@ def make_batched_numeric_combined_chi2_vec_jax(
             detected_periods,
             rv_mask,
             lc_mask,
+            rv_source_ids,
         )
 
     batched_logprob = jax.jit(_batched_logprob)
