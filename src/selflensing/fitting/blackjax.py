@@ -443,6 +443,7 @@ def self_lensing_system_from_fit_blackjax(
     peak_time_prior_sigma: units.day = None,
     parameterization="semi_major_axis",
     rv_source_ids=None,
+    profile_lc_baseline=False,
 ):
     """Fit using a BlackJAX random-walk Metropolis-Hastings backend.
 
@@ -589,6 +590,7 @@ def self_lensing_system_from_fit_blackjax(
         fit_device,
         peak_time_prior_sigma_days,
         rv_source_ids=rv_source_ids,
+        profile_lc_baseline=profile_lc_baseline,
     )
 
     def logprob(position):
@@ -915,6 +917,7 @@ def self_lensing_systems_from_batched_fit_blackjax(
     return_walker_state=False,
     posterior_sample_count=None,
     rv_source_ids=None,
+    profile_lc_baseline=False,
 ):
     """Fit many independent systems in one batched BlackJAX-style run.
 
@@ -1007,6 +1010,7 @@ def self_lensing_systems_from_batched_fit_blackjax(
         lc_mask,
         fit_device,
         rv_source_ids=rv_source_ids,
+        profile_lc_baseline=profile_lc_baseline,
     )
 
     nwalkers = int(nwalkers)

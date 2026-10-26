@@ -46,6 +46,7 @@ def self_lensing_system_from_fit(
     stop_on_convergence=False,
     initial_walker_state=None,
     rv_source_ids=None,
+    profile_lc_baseline=False,
 ):
     ndim = 5
     initial_walker_coords = None
@@ -203,7 +204,8 @@ def self_lensing_system_from_fit(
     sampler = emcee.EnsembleSampler(
         nwalkers,
         ndim,
-        make_combined_chi2_vec(*args, rv_source_ids=rv_source_ids),
+        make_combined_chi2_vec(*args, rv_source_ids=rv_source_ids,
+                               profile_lc_baseline=profile_lc_baseline),
         vectorize=True,
     )
     starting_walker_state = (

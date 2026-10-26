@@ -41,6 +41,7 @@ def combined_chi2(
     lc_mask=None,
     peak_time_prior_sigma=None,
     rv_source_ids=None,
+    profile_lc_baseline=False,
 ):
     """Compute log-likelihood for self-lensing binary parameters.
 
@@ -70,6 +71,9 @@ def combined_chi2(
     # # e = 1 is parabolic, so less than but not equal
     # if e < DEFAULT_LIMITS["e"][0] or e >= DEFAULT_LIMITS["e"][1]:
     #     return -jnp.inf
+
+    if profile_lc_baseline and gp_model is not None:
+        raise NotImplementedError("Photometric baseline profiling requires independent Gaussian errors")
 
     Mcomp = unxt.Quantity(Mcomp, SelfLensingSystem.param_units["Mcomp"])
     if Rcomp is not None:
@@ -224,7 +228,7 @@ def combined_chi2(
                         model_lc = model_lc.value
                     if center_lc_model:
                         model_lc = model_lc - 1.0
-                    return chi2_masked(
+                    return (profiled_lc_chi2 if profile_lc_baseline else chi2_masked)(
                         observed_lc,
                         observed_lc_err,
                         model_lc,
@@ -316,6 +320,16 @@ def chi2_masked(obs, obs_err, model, mask=None):
     return -jnp.sum(weight * (obs - model) ** 2 / obs_err**2)
 
 
+
+def profiled_lc_chi2(obs, obs_err, model, mask=None):
+    """Negative chi squared with an inverse-variance fitted additive baseline.
+
+    Recomputed for each model without adding a sampler dimension. Masked
+    padding contributes neither to the offset nor the residual sum.
+    """
+    return profiled_rv_chi2(obs, obs_err, model, mask)
+
+
 def _prepare_rv_source_ids(source_ids, observed_rv):
     """Validate per-observation labels and encode dense IDs per fit before JIT."""
     if source_ids is None:
@@ -376,6 +390,7 @@ def numeric_combined_chi2(
     rv_mask=None,
     lc_mask=None,
     rv_source_ids=None,
+    profile_lc_baseline=False,
 ):
     """Object-free deterministic equivalent of :func:`combined_chi2`.
 
@@ -413,7 +428,8 @@ def numeric_combined_chi2(
     if observed_lc is not None:
         if center_lc_model:
             model_lc = model_lc - 1.0
-        result = result + chi2_masked(observed_lc, observed_lc_err, model_lc, lc_mask)
+        result = result + (profiled_lc_chi2 if profile_lc_baseline else chi2_masked)(
+            observed_lc, observed_lc_err, model_lc, lc_mask)
 
     if detected_periods.size > 0:
         finite_periods = jnp.where(
@@ -460,6 +476,7 @@ def make_combined_chi2_vec(
     model_sls=None,
     device=None,
     rv_source_ids=None,
+    profile_lc_baseline=False,
 ):
     # Strip astropy units at Python level (before JIT tracing) to enable
     # better compiler optimization and reduce tracer overhead.
@@ -516,6 +533,7 @@ def make_combined_chi2_vec(
                     period_max,
                     model_sls,
                     rv_source_ids=rv_source_ids,
+                    profile_lc_baseline=profile_lc_baseline,
                 )
             )(params)
         )
@@ -577,6 +595,7 @@ def make_combined_chi2_vec_jax(
     device=None,
     peak_time_prior_sigma=None,
     rv_source_ids=None,
+    profile_lc_baseline=False,
 ):
     """Build a JAX-native vectorized log-probability function.
 
@@ -637,6 +656,7 @@ def make_combined_chi2_vec_jax(
                     period_max,
                     model_sls,
                     rv_source_ids=rv_source_ids,
+                    profile_lc_baseline=profile_lc_baseline,
                     peak_time_prior_sigma=peak_time_prior_sigma,
                 )
             )(params)
@@ -675,6 +695,7 @@ def make_batched_combined_chi2_vec_jax(
     lc_mask=None,
     device=None,
     rv_source_ids=None,
+    profile_lc_baseline=False,
 ):
     """Build a JAX-native batched log-probability function.
 
@@ -762,6 +783,7 @@ def make_batched_combined_chi2_vec_jax(
                     row_rv_mask,
                     row_lc_mask,
                     rv_source_ids=row_rv_source_ids,
+                    profile_lc_baseline=profile_lc_baseline,
                 )
             )(params)
         )
@@ -871,6 +893,7 @@ def make_batched_numeric_combined_chi2_vec_jax(
     lc_mask=None,
     device=None,
     rv_source_ids=None,
+    profile_lc_baseline=False,
 ):
     """Build the numeric likelihood used exclusively by batched BlackJAX fits."""
     rv_source_ids = _prepare_rv_source_ids(rv_source_ids, _extract_value(observed_rv))
@@ -944,6 +967,7 @@ def make_batched_numeric_combined_chi2_vec_jax(
                 row_rv_mask,
                 row_lc_mask,
                 rv_source_ids=row_rv_source_ids,
+                    profile_lc_baseline=profile_lc_baseline,
             )
         )(row_params)
 
