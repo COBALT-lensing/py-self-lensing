@@ -74,8 +74,9 @@ DEFAULT_TARGET_ACCEPTANCE = 0.234
 
 
 def _initial_walker_positions(
-    nwalkers, initial_walker_state=None, peak_time_prior_sigma_days=None
+    nwalkers, initial_walker_state=None, peak_time_prior_sigma_days=None, rng=None
 ):
+    rng = numpy.random if rng is None else rng
     ndim = 6 if peak_time_prior_sigma_days is not None else 5
     if initial_walker_state is not None:
         initial_walker_coords = getattr(
@@ -87,7 +88,7 @@ def _initial_walker_positions(
         if (peak_time_prior_sigma_days is not None
                 and initial_walker_coords.ndim == 2
                 and initial_walker_coords.shape[1] == 5):
-            offsets = numpy.random.normal(
+            offsets = rng.normal(
                 0.0, peak_time_prior_sigma_days * 0.25,
                 size=(initial_walker_coords.shape[0], 1),
             )
@@ -102,7 +103,7 @@ def _initial_walker_positions(
         return initial_walker_coords
 
     p0 = [
-        numpy.random.uniform(bounds[0], bounds[1], nwalkers)
+        rng.uniform(bounds[0], bounds[1], nwalkers)
         for bounds in (
             DEFAULT_LIMITS["i"],
             DEFAULT_LIMITS["Macc"],
@@ -120,14 +121,14 @@ def _initial_walker_positions(
     )
     positions = numpy.asarray(list(zip(*p0)), dtype=float)
     if peak_time_prior_sigma_days is not None:
-        offsets = numpy.random.normal(
+        offsets = rng.normal(
             0.0, peak_time_prior_sigma_days * 0.25, size=(nwalkers, 1)
         )
         positions = numpy.concatenate((positions, offsets), axis=1)
     return positions
 
 
-def _initial_batched_walker_positions(nfits, nwalkers, initial_walker_state=None):
+def _initial_batched_walker_positions(nfits, nwalkers, initial_walker_state=None, rng=None):
     ndim = 5
     if initial_walker_state is not None:
         initial_walker_coords = getattr(
@@ -161,7 +162,7 @@ def _initial_batched_walker_positions(nfits, nwalkers, initial_walker_state=None
         )
 
     return numpy.stack(
-        [_initial_walker_positions(nwalkers) for _ in range(nfits)],
+        [_initial_walker_positions(nwalkers, rng=rng) for _ in range(nfits)],
         axis=0,
     )
 
@@ -444,12 +445,21 @@ def self_lensing_system_from_fit_blackjax(
     parameterization="semi_major_axis",
     rv_source_ids=None,
     profile_lc_baseline=False,
+    warmup_steps=None,
+    adapt_covariance=False,
+    warmup_restart=False,
+    observable_seed=None,
 ):
     """Fit using a BlackJAX random-walk Metropolis-Hastings backend.
 
     This is an additive, JAX-native alternative to self_lensing_system_from_fit().
     It keeps walker positions and log-probabilities on the selected JAX device
     during sampling and returns a small emcee-like result adapter.
+
+    Warm-up tunes each coordinate separately (or an optional full covariance).
+    ``warmup_steps`` defaults to ``burn``; warm-up is unrecorded. The transform
+    is frozen throughout the returned chain. ``warmup_restart`` optionally
+    seeds each warm-up block from high-probability states, which can lose modes.
 
     Limitations:
     - Rcomp must be provided. The default SelfLensingSystem path infers Rcomp
@@ -521,8 +531,22 @@ def self_lensing_system_from_fit_blackjax(
     if peak_time_prior_sigma_days is not None and peak_time_prior_sigma_days <= 0:
         raise ValueError("peak_time_prior_sigma must be positive")
     p0 = _initial_walker_positions(
-        nwalkers, initial_walker_state, peak_time_prior_sigma_days
+        nwalkers, initial_walker_state, peak_time_prior_sigma_days,
+        rng=numpy.random.default_rng(random_seed),
     )
+    if observable_seed is not None:
+        if initial_walker_state is not None:
+            raise ValueError('observable_seed cannot be combined with initial_walker_state')
+        if parameterization != 'semi_major_axis':
+            raise ValueError('observable_seed requires semi_major_axis parameterization')
+        from .initialization import observable_seed_positions
+        physical_seeds = observable_seed_positions(
+            **observable_seed, nwalkers=nwalkers, random_seed=random_seed,
+            companion_mass_msun=float(Mcomp.to_value(units.M_sun)),
+            companion_radius_rsun=float(Rcomp.to_value(units.R_sun)),
+            companion_teff_k=None if Teff is None else float(Teff.to_value(units.K)),
+        )
+        p0[:, :5] = physical_seeds
     nwalkers = p0.shape[0]
     if parameterization not in ("semi_major_axis", "period"):
         raise ValueError("Unknown parameterization")
@@ -661,60 +685,36 @@ def self_lensing_system_from_fit_blackjax(
             "blackjax fit: locally refined %d/%d starting walkers",
             int(improve.sum()), nwalkers,
         )
-    rng_key = jax.random.PRNGKey(random_seed)
+    from .adaptation import tune_proposals, proposal_step
+    warmup = tune_proposals(
+        lambda positions: jax.vmap(logprob)(positions[0])[None, :],
+        jax.device_put(jax_numpy.asarray(p0)[None, :, :], fit_device), proposal_scale,
+        steps=burn if warmup_steps is None else warmup_steps,
+        random_seed=random_seed + 2, covariance=adapt_covariance,
+        restart=warmup_restart,
+    )
+    transform = warmup.transform[0]
+    proposal_scale = jnp.diagonal(transform)
+    warmup_acceptance = warmup.acceptance[:, 0, :]
 
-    def make_runner(current_proposal_scale):
-        random_walk = blackjax.additive_step_random_walk(
-            logprob,
-            _coordinate_normal_random_walk(current_proposal_scale),
-        )
+    def proposal(key, position):
+        increment, _ = proposal_step(key, position[None, :], transform, adapt_covariance)
+        return increment[0]
 
-        def one_step(current_state, current_rng_key):
-            walker_keys = jax.random.split(current_rng_key, nwalkers)
-            new_state, info = jax.vmap(random_walk.step)(walker_keys, current_state)
-            return new_state, (new_state.position, new_state.logdensity, info.is_accepted)
+    random_walk = blackjax.additive_step_random_walk(logprob, proposal)
+    state = jax.vmap(random_walk.init)(warmup.positions[0])
 
-        @jax.jit
-        def run_steps(current_state, rng_keys):
-            return jax.lax.scan(one_step, current_state, rng_keys)
+    @jax.jit
+    def run_steps(current_state, rng_keys):
+        def one_step(state, key):
+            keys = jax.random.split(key, nwalkers)
+            state, info = jax.vmap(random_walk.step)(keys, state)
+            return state, (state.position, state.logdensity, info.is_accepted)
+        return jax.lax.scan(one_step, current_state, rng_keys)
 
-        return random_walk, run_steps
-
-    random_walk, run_steps = make_runner(proposal_scale)
-    state = jax.vmap(random_walk.init)(jax.device_put(jax_numpy.asarray(p0), fit_device))
-
-    def adapt_proposal(current_state, acceptance):
-        """Return a state under a proposal scale tuned from one pilot block."""
-        nonlocal proposal_scale, random_walk, run_steps
-        warmup_acceptance.append(acceptance)
-        adjustment = numpy.exp(
-            2 * numpy.clip(
-                acceptance - DEFAULT_TARGET_ACCEPTANCE, -0.5, 0.5
-            )
-        )
-        proposal_scale = proposal_scale * adjustment
-        random_walk, run_steps = make_runner(proposal_scale)
-        return jax.vmap(random_walk.init)(current_state.position)
-
-    # Tune the scalar scale during a short unrecorded warm-up. The existing
-    # burn argument supplies the natural budget, so callers keep the same API.
-    warmup_steps = min(max(burn, 0), DEFAULT_WARMUP_MAX_STEPS)
-    warmup_acceptance = []
-    if warmup_steps:
-        warmup_rounds = min(DEFAULT_WARMUP_ROUNDS, warmup_steps)
-        base_steps, remainder = divmod(warmup_steps, warmup_rounds)
-        for round_index in range(warmup_rounds):
-            current_steps = base_steps + (round_index < remainder)
-            rng_key, warmup_key = jax.random.split(rng_key)
-            warmup_keys = jax.random.split(warmup_key, current_steps)
-            state, (_positions, _log_prob, accepted) = run_steps(state, warmup_keys)
-            acceptance = float(numpy.asarray(jax.device_get(jnp.mean(accepted))))
-            state = adapt_proposal(state, acceptance)
-        logging.info(
-            "blackjax fit: warm-up acceptance %s; final proposal scale %s",
-            warmup_acceptance,
-            numpy.asarray(jax.device_get(proposal_scale)),
-        )
+    logging.info('blackjax fit: coordinate warm-up acceptance %s; final proposal scale %s',
+                 warmup_acceptance, numpy.asarray(proposal_scale))
+    rng_key = jax.random.PRNGKey(random_seed + 3)
 
     chain_chunks = []
     log_prob_chunks = []
@@ -766,9 +766,6 @@ def self_lensing_system_from_fit_blackjax(
                 )
             remaining_steps -= current_chunk_size
             completed_steps += current_chunk_size
-            if completed_steps <= burn:
-                acceptance = float(numpy.asarray(jax.device_get(jnp.mean(accepted))))
-                state = adapt_proposal(state, acceptance)
             if progress_iter is not None:
                 progress_iter.update(current_chunk_size)
     finally:
@@ -785,8 +782,9 @@ def self_lensing_system_from_fit_blackjax(
         log_prob = jax.device_get(jnp.concatenate(log_prob_chunks, axis=0))
         acceptance = jax.device_get(jnp.concatenate(acceptance_chunks, axis=0))
         sampler = BlackJAXSamplerResult(chain, log_prob, acceptance=acceptance)
-        sampler.warmup_acceptance = tuple(warmup_acceptance)
+        sampler.warmup_acceptance = numpy.asarray(warmup_acceptance)
         sampler.proposal_scale = numpy.asarray(jax.device_get(proposal_scale))
+        sampler.proposal_transform = numpy.asarray(jax.device_get(transform))
         sampler.parameterization = parameterization
         sampler.parameter_names = ["period" if parameterization == "period" else "a", "i", "Macc", "e", "periapsis_phase"]
         sampler.parameter_units = ["day" if parameterization == "period" else "au", "rad", "solMass", "", "rad"]
@@ -918,6 +916,9 @@ def self_lensing_systems_from_batched_fit_blackjax(
     posterior_sample_count=None,
     rv_source_ids=None,
     profile_lc_baseline=False,
+    warmup_steps=None,
+    adapt_covariance=False,
+    warmup_restart=False,
 ):
     """Fit many independent systems in one batched BlackJAX-style run.
 
@@ -1024,7 +1025,8 @@ def self_lensing_systems_from_batched_fit_blackjax(
             raise ValueError("posterior_sample_count requires return_sampler=True")
         if burn >= nsteps:
             raise ValueError("burn must be smaller than nsteps")
-    p0 = _initial_batched_walker_positions(nfits, nwalkers, initial_walker_state)
+    p0 = _initial_batched_walker_positions(nfits, nwalkers, initial_walker_state,
+                                           rng=numpy.random.default_rng(random_seed))
     nwalkers = p0.shape[1]
     position = jax.device_put(jax_numpy.asarray(p0), fit_device)
     log_prob = logprob_vec(position)
@@ -1042,12 +1044,22 @@ def self_lensing_systems_from_batched_fit_blackjax(
     )
     proposal_scale = jax.device_put(jax_numpy.asarray(proposal_scale), fit_device)
 
+    from .adaptation import tune_proposals, proposal_step
+    warmup = tune_proposals(
+        logprob_vec, position, proposal_scale,
+        steps=burn if warmup_steps is None else warmup_steps,
+        random_seed=random_seed + 2, covariance=adapt_covariance,
+        restart=warmup_restart,
+    )
+    position = warmup.positions
+    log_prob = logprob_vec(position)
+    transform = warmup.transform
+
     def one_step(carry, rng_key):
         position, log_prob = carry
         proposal_key, accept_key = jax.random.split(rng_key)
-        proposal = position + jax.random.normal(
-            proposal_key, shape=position.shape
-        ) * proposal_scale
+        increment, _ = proposal_step(proposal_key, position, transform, adapt_covariance)
+        proposal = position + increment
         proposal_log_prob = logprob_vec(proposal)
         log_accept_ratio = proposal_log_prob - log_prob
         accepted = jnp.log(
@@ -1214,6 +1226,10 @@ def self_lensing_systems_from_batched_fit_blackjax(
             )
             for fit_index in range(nfits)
         ]
+        for fit_index, sampler in enumerate(samplers):
+            sampler.warmup_acceptance = warmup.acceptance[:, fit_index, :]
+            sampler.proposal_transform = numpy.asarray(transform[fit_index])
+            sampler.proposal_scale = numpy.diag(sampler.proposal_transform)
     else:
         samplers = None
     return systems, samplers, final_walker_state

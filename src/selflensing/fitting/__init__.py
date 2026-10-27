@@ -15,6 +15,7 @@ from .blackjax import (
     self_lensing_system_from_fit_blackjax,
     self_lensing_systems_from_batched_fit_blackjax,
 )
+from .initialization import observable_seed_positions
 from .emcee import self_lensing_system_from_fit
 from .likelihood import (
     chi2,
@@ -26,6 +27,7 @@ from .likelihood import (
 )
 
 __all__ = [
+    "observable_seed_positions",
     "BlackJAXFitState",
     "BlackJAXSamplerResult",
     "chi2",
