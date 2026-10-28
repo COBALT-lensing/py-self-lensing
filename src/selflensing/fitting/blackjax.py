@@ -14,7 +14,9 @@ from tqdm import tqdm
 from ..generators import SelfLensingLightcurveGenerator
 from ..models import SelfLensingSystem, DEFAULT_LIMITS
 from ._utils import _select_fit_device
+from .geometry import (b_source_scale, physical_to_geometry, geometry_to_physical, validate_geometry)
 from .likelihood import (
+    LIKELIHOOD_CONVENTION,
     make_batched_numeric_combined_chi2_vec_jax,
     make_combined_chi2_vec_jax,
 )
@@ -25,6 +27,7 @@ class BlackJAXFitState:
     coords: numpy.ndarray
     parameterization: str = "semi_major_axis"
     refine_initialization: bool = False
+    inclination_parameterization: str = "inclination"
 
 
 class BlackJAXSamplerResult:
@@ -35,8 +38,10 @@ class BlackJAXSamplerResult:
         self.log_prob = numpy.asarray(log_prob)
         self.acceptance = None if acceptance is None else numpy.asarray(acceptance)
         self.chain_start_step = int(chain_start_step)
+        self.likelihood_convention = LIKELIHOOD_CONVENTION
         self.warmup_acceptance = ()
         self.proposal_scale = None
+        self.inclination_parameterization = "inclination"
 
     @property
     def iteration(self):
@@ -445,10 +450,20 @@ def self_lensing_system_from_fit_blackjax(
     parameterization="semi_major_axis",
     rv_source_ids=None,
     profile_lc_baseline=False,
+    inclination_parameterization="inclination",
     warmup_steps=None,
+    warmup_rounds=None,
     adapt_covariance=False,
     warmup_restart=False,
+    robust_covariance=False,
+    recovery_probability=0.,
+    recovery_df=3.,
+    recovery_centres_count=16,
+    warmup_log_density_cut=20.,
     observable_seed=None,
+    independence_proposal=None,
+    independence_chunk_size=512,
+    independence_coordinates="sampling",
 ):
     """Fit using a BlackJAX random-walk Metropolis-Hastings backend.
 
@@ -553,15 +568,29 @@ def self_lensing_system_from_fit_blackjax(
     state_parameterization = getattr(initial_walker_state, "parameterization", "semi_major_axis")
     if initial_walker_state is not None and state_parameterization != parameterization:
         raise ValueError("Initial walker state parameterization does not match sampler")
-    # Kepler's law in AU, solar masses and days. Preserve the original uniform-a
-    # prior using |da/dP| when evaluating period coordinates.
+    validate_geometry(inclination_parameterization, DEFAULT_LIMITS['i'])
+    state_geometry = getattr(initial_walker_state, 'inclination_parameterization', 'inclination')
+    if initial_walker_state is not None and state_geometry != inclination_parameterization:
+        raise ValueError('Initial walker geometry does not match sampler')
     kepler_factor = G.to_value(units.au**3 / (units.M_sun * units.day**2)) / (4 * numpy.pi**2)
     companion_mass = float(Mcomp.to_value(units.M_sun))
-    def physical_position(position):
-        if parameterization == "semi_major_axis":
+    radius_rsun = float(Rcomp.to_value(units.R_sun))
+
+    def orbital_position(position):
+        if parameterization == 'semi_major_axis':
             return position
         a = (kepler_factor * (companion_mass + position[2]) * position[0]**2)**(1 / 3)
         return position.at[0].set(a)
+
+    def physical_and_logjac(position):
+        physical = orbital_position(position)
+        if inclination_parameterization == 'b_source':
+            return geometry_to_physical(physical, radius_rsun, DEFAULT_LIMITS['i'])
+        return physical, 0.
+
+    def physical_position(position):
+        return physical_and_logjac(position)[0]
+
     if parameterization == "period":
         if period_min is None or period_max is None:
             raise ValueError("Period parameterization requires period_min and period_max")
@@ -571,6 +600,11 @@ def self_lensing_system_from_fit_blackjax(
             raise ValueError("Period bounds must be positive and ordered")
         if initial_walker_state is None:
             p0[:, 0] = numpy.random.default_rng(random_seed).uniform(period_low, period_high, len(p0))
+
+    if inclination_parameterization == 'b_source' and initial_walker_state is None:
+        physical_starts = jax.vmap(orbital_position)(jax_numpy.asarray(p0))
+        p0 = numpy.array(p0, copy=True)
+        p0[:, 1] = numpy.asarray(physical_to_geometry(physical_starts, radius_rsun))[:, 1]
 
     Mcomp = Mcomp.to(SelfLensingSystem.param_units["Mcomp"])
     if Rcomp is not None:
@@ -617,9 +651,19 @@ def self_lensing_system_from_fit_blackjax(
         profile_lc_baseline=profile_lc_baseline,
     )
 
+    def physical_scores(positions, scores):
+        if inclination_parameterization != 'b_source' and parameterization != 'period':
+            return scores
+        flat = positions.reshape((-1, positions.shape[-1]))
+        physical, jacobian = jax.vmap(physical_and_logjac)(flat)
+        if parameterization == 'period':
+            jacobian = jacobian + jnp.log(2*physical[:, 0]/(3*flat[:, 0]))
+        jacobian = jnp.broadcast_to(jacobian, (len(flat),)).reshape(scores.shape)
+        return jnp.where(jnp.isfinite(jacobian), scores-jacobian, -jnp.inf)
+
     def logprob(position):
-        physical = physical_position(position)
-        value = logprob_vec(physical[jnp.newaxis, :])[0]
+        physical, geometry_logjac = physical_and_logjac(position)
+        value = logprob_vec(physical[jnp.newaxis, :])[0] + geometry_logjac
         if parameterization == "period":
             value = value + jnp.log(2 * physical[0] / (3 * position[0]))
             value = jnp.where((position[0] >= period_low) & (position[0] <= period_high), value, -jnp.inf)
@@ -629,6 +673,8 @@ def self_lensing_system_from_fit_blackjax(
         proposal_scale = _default_blackjax_proposal_scale(
             proposal_scale_fraction, peak_time_prior_sigma_days
         )
+        if inclination_parameterization == 'b_source':
+            proposal_scale = proposal_scale.at[1].set(.05)
     if parameterization == "period" and proposal_scale is None:
         raise AssertionError("Missing proposal scales")
     if parameterization == "period":
@@ -668,12 +714,19 @@ def self_lensing_system_from_fit_blackjax(
             else DEFAULT_LIMITS["a"]
         )
         local_positions[:, 0] = numpy.clip(local_positions[:, 0], *first_bounds)
-        local_positions[:, 1] = numpy.clip(local_positions[:, 1], *DEFAULT_LIMITS["i"])
+        if inclination_parameterization == 'inclination':
+            local_positions[:, 1] = numpy.clip(local_positions[:, 1], *DEFAULT_LIMITS['i'])
         local_positions[:, 2] = numpy.clip(local_positions[:, 2], *DEFAULT_LIMITS["Macc"])
         local_positions[:, 3] = numpy.clip(local_positions[:, 3], *DEFAULT_LIMITS["e"])
         local_positions[:, 4] = numpy.mod(
             local_positions[:, 4], 2 * numpy.pi
         )
+        if inclination_parameterization == 'b_source':
+            physical = numpy.asarray(jax.vmap(orbital_position)(jax_numpy.asarray(local_positions)))
+            scale = numpy.asarray(b_source_scale(physical[:, 0], radius_rsun, physical[:, 3], physical[:, 4]))
+            low = scale * numpy.cos(float(DEFAULT_LIMITS['i'][1]))
+            high = scale * numpy.cos(float(DEFAULT_LIMITS['i'][0]))
+            local_positions[:, 1] = numpy.clip(local_positions[:, 1], low, high * (1-1e-12))
         local_log_prob = numpy.asarray(jax.device_get(jax.vmap(logprob)(
             jax.device_put(jax_numpy.asarray(local_positions), fit_device)
         )))
@@ -685,13 +738,17 @@ def self_lensing_system_from_fit_blackjax(
             "blackjax fit: locally refined %d/%d starting walkers",
             int(improve.sum()), nwalkers,
         )
+    from .recovery import mixture_candidate
     from .adaptation import tune_proposals, proposal_step
     warmup = tune_proposals(
         lambda positions: jax.vmap(logprob)(positions[0])[None, :],
         jax.device_put(jax_numpy.asarray(p0)[None, :, :], fit_device), proposal_scale,
-        steps=burn if warmup_steps is None else warmup_steps,
+        steps=burn if warmup_steps is None else warmup_steps, rounds=warmup_rounds,
         random_seed=random_seed + 2, covariance=adapt_covariance,
-        restart=warmup_restart,
+        restart=warmup_restart, robust_covariance=robust_covariance,
+        score_transform=physical_scores, log_density_cut=warmup_log_density_cut,
+        recovery_probability=recovery_probability, recovery_df=recovery_df,
+        recovery_centres_count=recovery_centres_count, periodic_index=4,
     )
     transform = warmup.transform[0]
     proposal_scale = jnp.diagonal(transform)
@@ -707,9 +764,23 @@ def self_lensing_system_from_fit_blackjax(
     @jax.jit
     def run_steps(current_state, rng_keys):
         def one_step(state, key):
-            keys = jax.random.split(key, nwalkers)
-            state, info = jax.vmap(random_walk.step)(keys, state)
-            return state, (state.position, state.logdensity, info.is_accepted)
+            if recovery_probability:
+                proposal_key, accept_key = jax.random.split(key)
+                candidate, correction, _, recovery = mixture_candidate(
+                    proposal_key, state.position[None], transform[None], adapt_covariance,
+                    warmup.recovery_centres, warmup.recovery_transform,
+                    recovery_probability, recovery_df)
+                score = jax.vmap(logprob)(candidate[0])
+                accepted = jnp.log(jax.random.uniform(accept_key, score.shape)) < score-state.logdensity+correction[0]
+                state = state._replace(position=jnp.where(accepted[:,None],candidate[0],state.position),
+                                       logdensity=jnp.where(accepted,score,state.logdensity))
+                recovery = recovery[0]
+            else:
+                keys = jax.random.split(key, nwalkers)
+                state, info = jax.vmap(random_walk.step)(keys, state)
+                accepted = info.is_accepted
+                recovery = jnp.zeros_like(accepted)
+            return state, (state.position, state.logdensity, accepted, recovery)
         return jax.lax.scan(one_step, current_state, rng_keys)
 
     logging.info('blackjax fit: coordinate warm-up acceptance %s; final proposal scale %s',
@@ -719,6 +790,7 @@ def self_lensing_system_from_fit_blackjax(
     chain_chunks = []
     log_prob_chunks = []
     acceptance_chunks = []
+    recovery_chunks = []
     posterior_summary_top_k = int(posterior_summary_top_k)
     if posterior_summary_top_k < 1:
         raise ValueError("posterior_summary_top_k must be at least 1")
@@ -737,43 +809,89 @@ def self_lensing_system_from_fit_blackjax(
     else:
         progress_iter = None
 
+    mixture_sampling_chain = None
+    mixture_sampling_log_prob = None
     try:
-        chunk_size = nsteps if not progress else max(1, int(progress_chunk_size))
-        while remaining_steps > 0:
-            current_chunk_size = min(chunk_size, remaining_steps)
-            # Keep every adaptation block entirely within discarded burn-in.
-            if completed_steps < burn:
-                current_chunk_size = min(current_chunk_size, burn - completed_steps)
-            rng_key, sample_key = jax.random.split(rng_key)
-            step_keys = jax.random.split(sample_key, current_chunk_size)
-            if return_sampler:
-                state, (positions, log_prob, accepted) = run_steps(state, step_keys)
-                chain_chunks.append(positions)
-                log_prob_chunks.append(log_prob)
-                acceptance_chunks.append(accepted)
+        if independence_proposal is not None:
+            if not return_sampler:
+                raise ValueError('Frozen mixture sampling currently requires return_sampler=True')
+            from .mixture import sample_independence
+            if independence_proposal.centres.shape[-1] != state.position.shape[-1]:
+                raise ValueError('Mixture dimensions must match sampler coordinates')
+            last_progress = [0]
+            def mixture_progress(done, total, acceptance):
+                if progress_iter is not None:
+                    progress_iter.update(done-last_progress[0])
+                last_progress[0] = done
+            if independence_coordinates not in ('sampling', 'pulse'):
+                raise ValueError('independence_coordinates must be sampling or pulse')
+            if independence_coordinates == 'pulse':
+                if parameterization != 'semi_major_axis' or inclination_parameterization != 'inclination':
+                    raise ValueError('Pulse mixture sampling reports physical a/i coordinates; use semi_major_axis and inclination')
+                from .pulse import physical_to_pulse, pulse_to_physical
+                def mixture_target(z):
+                    physical, jacobian = pulse_to_physical(z, companion_mass, radius_rsun)
+                    return logprob_vec(physical) + jacobian
+                mixture_target = jax.jit(mixture_target)
+                mixture_initial = physical_to_pulse(state.position, companion_mass, radius_rsun)
             else:
-                state, (positions, log_prob, accepted) = run_steps(state, step_keys)
-                keep_steps = (
-                    jnp.arange(completed_steps, completed_steps + current_chunk_size)
-                    >= burn
-                )
-                top_positions, top_log_prob = _update_top_posterior_samples(
-                    top_positions,
-                    top_log_prob,
-                    positions,
-                    log_prob,
-                    keep_steps,
-                )
-            remaining_steps -= current_chunk_size
-            completed_steps += current_chunk_size
-            if progress_iter is not None:
-                progress_iter.update(current_chunk_size)
+                mixture_target = lambda x: jax.vmap(logprob)(x)
+                mixture_initial = state.position
+            positions, log_prob, accepted = sample_independence(
+                mixture_target, independence_proposal,
+                numpy.asarray(mixture_initial), steps=nsteps, seed=random_seed,
+                chunk=independence_chunk_size, report=mixture_progress)
+            if independence_coordinates == 'pulse':
+                mixture_sampling_chain = positions
+                mixture_sampling_log_prob = log_prob
+                decoded, jacobian = pulse_to_physical(jnp.asarray(positions.reshape(-1, positions.shape[-1])),
+                                                     companion_mass, radius_rsun)
+                positions = numpy.asarray(decoded).reshape(positions.shape)
+                log_prob = log_prob - numpy.asarray(jacobian).reshape(log_prob.shape)
+            chain_chunks.append(positions)
+            log_prob_chunks.append(log_prob)
+            acceptance_chunks.append(accepted)
+            state = state._replace(position=jnp.asarray(positions[-1]),
+                                   logdensity=jnp.asarray(log_prob[-1]))
+        else:
+            chunk_size = nsteps if not progress else max(1, int(progress_chunk_size))
+            while remaining_steps > 0:
+                current_chunk_size = min(chunk_size, remaining_steps)
+                # Keep every adaptation block entirely within discarded burn-in.
+                if completed_steps < burn:
+                    current_chunk_size = min(current_chunk_size, burn - completed_steps)
+                rng_key, sample_key = jax.random.split(rng_key)
+                step_keys = jax.random.split(sample_key, current_chunk_size)
+                if return_sampler:
+                    state, (positions, log_prob, accepted, recovery) = run_steps(state, step_keys)
+                    chain_chunks.append(positions)
+                    log_prob_chunks.append(log_prob)
+                    acceptance_chunks.append(accepted)
+                    recovery_chunks.append(recovery)
+                else:
+                    state, (positions, log_prob, accepted, recovery) = run_steps(state, step_keys)
+                    keep_steps = (
+                        jnp.arange(completed_steps, completed_steps + current_chunk_size)
+                        >= burn
+                    )
+                    top_positions, top_log_prob = _update_top_posterior_samples(
+                        top_positions,
+                        top_log_prob,
+                        positions,
+                        physical_scores(positions, log_prob),
+                        keep_steps,
+                    )
+                remaining_steps -= current_chunk_size
+                completed_steps += current_chunk_size
+                if progress_iter is not None:
+                    progress_iter.update(current_chunk_size)
     finally:
         if progress_iter is not None:
             progress_iter.close()
 
     final_walker_state = (
-        BlackJAXFitState(coords=jax.device_get(state.position), parameterization=parameterization)
+        BlackJAXFitState(coords=jax.device_get(state.position), parameterization=parameterization,
+                         inclination_parameterization=inclination_parameterization)
         if return_walker_state
         else None
     )
@@ -782,17 +900,29 @@ def self_lensing_system_from_fit_blackjax(
         log_prob = jax.device_get(jnp.concatenate(log_prob_chunks, axis=0))
         acceptance = jax.device_get(jnp.concatenate(acceptance_chunks, axis=0))
         sampler = BlackJAXSamplerResult(chain, log_prob, acceptance=acceptance)
+        sampler.recovery_attempted = numpy.asarray(jnp.concatenate(recovery_chunks)) if recovery_probability and recovery_chunks else None
+        sampler.proposal_kind = 'local_mixture' if independence_proposal is not None else 'random_walk'
+        sampler.independence_proposal = independence_proposal
+        sampler.independence_coordinates = independence_coordinates
+        sampler.sampling_chain = mixture_sampling_chain
+        sampler.sampling_log_prob = mixture_sampling_log_prob
+        _set_proposal_metadata(sampler, warmup, 0, recovery_probability, recovery_df, robust_covariance, warmup_log_density_cut)
         sampler.warmup_acceptance = numpy.asarray(warmup_acceptance)
         sampler.proposal_scale = numpy.asarray(jax.device_get(proposal_scale))
         sampler.proposal_transform = numpy.asarray(jax.device_get(transform))
+        sampler.inclination_parameterization = inclination_parameterization
         sampler.parameterization = parameterization
         sampler.parameter_names = ["period" if parameterization == "period" else "a", "i", "Macc", "e", "periapsis_phase"]
         sampler.parameter_units = ["day" if parameterization == "period" else "au", "rad", "solMass", "", "rad"]
+        if inclination_parameterization == 'b_source':
+            sampler.parameter_names[1] = 'b_source'
+            sampler.parameter_units[1] = ''
         if chain.shape[-1] == 6:
             sampler.parameter_names.append("peak_time_offset")
             sampler.parameter_units.append("day")
         flat_samples = jnp.asarray(sampler.get_chain(flat=True, discard=burn))
         flat_log_prob = jnp.asarray(sampler.get_log_prob(flat=True, discard=burn))
+        flat_log_prob = physical_scores(flat_samples, flat_log_prob)
         summary_top_k = min(posterior_summary_top_k, flat_log_prob.shape[0])
         top_log_prob, top_indices = jax.lax.top_k(flat_log_prob, summary_top_k)
         top_positions = flat_samples[top_indices]
@@ -916,9 +1046,16 @@ def self_lensing_systems_from_batched_fit_blackjax(
     posterior_sample_count=None,
     rv_source_ids=None,
     profile_lc_baseline=False,
+    inclination_parameterization="inclination",
     warmup_steps=None,
+    warmup_rounds=None,
     adapt_covariance=False,
     warmup_restart=False,
+    robust_covariance=False,
+    recovery_probability=0.,
+    recovery_df=3.,
+    recovery_centres_count=16,
+    warmup_log_density_cut=20.,
 ):
     """Fit many independent systems in one batched BlackJAX-style run.
 
@@ -1027,12 +1164,32 @@ def self_lensing_systems_from_batched_fit_blackjax(
             raise ValueError("burn must be smaller than nsteps")
     p0 = _initial_batched_walker_positions(nfits, nwalkers, initial_walker_state,
                                            rng=numpy.random.default_rng(random_seed))
+    if initial_walker_state is not None and getattr(initial_walker_state, 'parameterization', 'semi_major_axis') != 'semi_major_axis':
+        raise ValueError('Batched fitting requires semi_major_axis walker coordinates')
+    validate_geometry(inclination_parameterization, DEFAULT_LIMITS['i'])
+    if initial_walker_state is not None and getattr(initial_walker_state, 'inclination_parameterization', 'inclination') != inclination_parameterization:
+        raise ValueError('Initial walker geometry does not match sampler')
+    if inclination_parameterization == 'b_source':
+        radius_rsun = Rcomp.to_value(units.R_sun)[:, None]
+        if initial_walker_state is None:
+            p0 = numpy.asarray(physical_to_geometry(p0, radius_rsun))
+        physical_logprob_vec = logprob_vec
+        def logprob_vec(position):
+            physical, jacobian = geometry_to_physical(position, radius_rsun, DEFAULT_LIMITS['i'])
+            return physical_logprob_vec(physical) + jacobian
+    def physical_scores(positions, scores):
+        if inclination_parameterization != 'b_source':
+            return scores
+        _, jacobian = geometry_to_physical(positions, radius_rsun, DEFAULT_LIMITS['i'])
+        return jnp.where(jnp.isfinite(jacobian), scores - jacobian, -jnp.inf)
     nwalkers = p0.shape[1]
     position = jax.device_put(jax_numpy.asarray(p0), fit_device)
     log_prob = logprob_vec(position)
 
     if proposal_scale is None:
         proposal_scale = _default_blackjax_proposal_scale(proposal_scale_fraction)
+        if inclination_parameterization == 'b_source':
+            proposal_scale = proposal_scale.at[1].set(.05)
     proposal_scale = _scaled_proposal_scale(
         proposal_scale,
         observed_rv,
@@ -1044,12 +1201,16 @@ def self_lensing_systems_from_batched_fit_blackjax(
     )
     proposal_scale = jax.device_put(jax_numpy.asarray(proposal_scale), fit_device)
 
+    from .recovery import mixture_candidate
     from .adaptation import tune_proposals, proposal_step
     warmup = tune_proposals(
         logprob_vec, position, proposal_scale,
-        steps=burn if warmup_steps is None else warmup_steps,
+        steps=burn if warmup_steps is None else warmup_steps, rounds=warmup_rounds,
         random_seed=random_seed + 2, covariance=adapt_covariance,
-        restart=warmup_restart,
+        restart=warmup_restart, robust_covariance=robust_covariance,
+        score_transform=physical_scores, log_density_cut=warmup_log_density_cut,
+        recovery_probability=recovery_probability, recovery_df=recovery_df,
+        recovery_centres_count=recovery_centres_count, periodic_index=4,
     )
     position = warmup.positions
     log_prob = logprob_vec(position)
@@ -1058,16 +1219,24 @@ def self_lensing_systems_from_batched_fit_blackjax(
     def one_step(carry, rng_key):
         position, log_prob = carry
         proposal_key, accept_key = jax.random.split(rng_key)
-        increment, _ = proposal_step(proposal_key, position, transform, adapt_covariance)
-        proposal = position + increment
+        if recovery_probability:
+            proposal, correction, _, recovery = mixture_candidate(
+                proposal_key, position, transform, adapt_covariance,
+                warmup.recovery_centres, warmup.recovery_transform,
+                recovery_probability, recovery_df)
+        else:
+            increment, _ = proposal_step(proposal_key, position, transform, adapt_covariance)
+            proposal = position + increment
+            correction = 0.
+            recovery = jnp.zeros_like(log_prob, dtype=bool)
         proposal_log_prob = logprob_vec(proposal)
-        log_accept_ratio = proposal_log_prob - log_prob
+        log_accept_ratio = proposal_log_prob - log_prob + correction
         accepted = jnp.log(
             jax.random.uniform(accept_key, shape=log_prob.shape)
         ) < log_accept_ratio
         new_position = jnp.where(accepted[..., None], proposal, position)
         new_log_prob = jnp.where(accepted, proposal_log_prob, log_prob)
-        return (new_position, new_log_prob), (new_position, new_log_prob, accepted)
+        return (new_position, new_log_prob), (new_position, new_log_prob, accepted, recovery)
 
     @jax.jit
     def run_steps(position, log_prob, rng_keys):
@@ -1085,6 +1254,7 @@ def self_lensing_systems_from_batched_fit_blackjax(
     chain_chunks = []
     log_prob_chunks = []
     acceptance_chunks = []
+    recovery_chunks = []
     posterior_summary_top_k = int(posterior_summary_top_k)
     if posterior_summary_top_k < 1:
         raise ValueError("posterior_summary_top_k must be at least 1")
@@ -1138,14 +1308,15 @@ def self_lensing_systems_from_batched_fit_blackjax(
                 rng_key, sample_key = jax.random.split(rng_key)
                 step_keys = jax.random.split(sample_key, current_chunk_size)
                 if return_sampler:
-                    (position, log_prob), (positions, chunk_log_prob, accepted) = run_steps(
+                    (position, log_prob), (positions, chunk_log_prob, accepted, recovery) = run_steps(
                         position, log_prob, step_keys
                     )
                     chain_chunks.append(positions)
                     log_prob_chunks.append(chunk_log_prob)
                     acceptance_chunks.append(accepted)
+                    recovery_chunks.append(recovery)
                 else:
-                    (position, log_prob), (positions, chunk_log_prob, _accepted) = run_steps(
+                    (position, log_prob), (positions, chunk_log_prob, _accepted, _recovery) = run_steps(
                         position, log_prob, step_keys
                     )
                     keep_steps = (
@@ -1156,7 +1327,7 @@ def self_lensing_systems_from_batched_fit_blackjax(
                         top_positions,
                         top_log_prob,
                         positions,
-                        chunk_log_prob,
+                        physical_scores(positions, chunk_log_prob),
                         keep_steps,
                     )
                 remaining_steps -= current_chunk_size
@@ -1168,7 +1339,7 @@ def self_lensing_systems_from_batched_fit_blackjax(
             progress_iter.close()
 
     final_walker_state = (
-        BlackJAXFitState(coords=jax.device_get(position))
+        BlackJAXFitState(coords=jax.device_get(position), inclination_parameterization=inclination_parameterization)
         if return_walker_state
         else None
     )
@@ -1190,6 +1361,7 @@ def self_lensing_systems_from_batched_fit_blackjax(
         flat_log_prob = jnp.transpose(post_burn_log_prob, (1, 0, 2)).reshape(
             (nfits, -1)
         )
+        flat_log_prob = physical_scores(flat_positions, flat_log_prob)
         summary_top_k = min(posterior_summary_top_k, flat_log_prob.shape[1])
         top_log_prob, top_indices = jax.lax.top_k(flat_log_prob, summary_top_k)
         top_positions = jnp.take_along_axis(
@@ -1202,8 +1374,11 @@ def self_lensing_systems_from_batched_fit_blackjax(
     else:
         # Keep each reported system on an actual retained high-probability sample.
         summary_position = top_positions[:, 0, :]
+    physical_summary_position = summary_position
+    if inclination_parameterization == 'b_source':
+        physical_summary_position, _ = geometry_to_physical(summary_position, radius_rsun[:, 0], DEFAULT_LIMITS['i'])
     systems = _best_fit_systems_from_positions(
-        jax.device_get(summary_position),
+        jax.device_get(physical_summary_position),
         Rcomp,
         Mcomp,
         Teff,
@@ -1227,9 +1402,27 @@ def self_lensing_systems_from_batched_fit_blackjax(
             for fit_index in range(nfits)
         ]
         for fit_index, sampler in enumerate(samplers):
+            sampler.inclination_parameterization = inclination_parameterization
+            sampler.parameter_names = ['a', 'b_source' if inclination_parameterization == 'b_source' else 'i', 'Macc', 'e', 'periapsis_phase']
+            sampler.parameter_units = ['au', '' if inclination_parameterization == 'b_source' else 'rad', 'solMass', '', 'rad']
+            sampler.recovery_attempted = (numpy.asarray(jnp.concatenate(recovery_chunks))[:,fit_index]
+                if recovery_probability and recovery_chunks else None)
+            _set_proposal_metadata(sampler, warmup, fit_index, recovery_probability, recovery_df, robust_covariance, warmup_log_density_cut)
             sampler.warmup_acceptance = warmup.acceptance[:, fit_index, :]
             sampler.proposal_transform = numpy.asarray(transform[fit_index])
             sampler.proposal_scale = numpy.diag(sampler.proposal_transform)
     else:
         samplers = None
     return systems, samplers, final_walker_state
+
+
+def _set_proposal_metadata(sampler, warmup, index, probability, df, robust, cut):
+    """Record the frozen proposal and discarded warm-up diagnostics."""
+    sampler.recovery_probability = probability
+    sampler.recovery_df = df
+    sampler.robust_covariance = robust
+    sampler.warmup_log_density_cut = cut
+    sampler.warmup_eligible_fraction = numpy.asarray(warmup.eligible_fraction)[:,index]
+    sampler.warmup_recovery_acceptance = numpy.asarray(warmup.recovery_acceptance)[:,index]
+    sampler.recovery_centres = None if warmup.recovery_centres is None else numpy.asarray(warmup.recovery_centres[index])
+    sampler.recovery_transform = None if warmup.recovery_transform is None else numpy.asarray(warmup.recovery_transform[index])

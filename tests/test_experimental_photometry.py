@@ -25,6 +25,12 @@ class TestExperimentalPhotometry(unittest.TestCase):
         )
         self.params = jnp.asarray((1.0, jnp.pi / 2, 5.0, 0.1, 0.0))
 
+    def test_unit_standardized_residuals_have_gaussian_log_likelihood(self):
+        from selflensing.experimental.photometry import photometric_model
+        model=photometric_model(self.params,self.row)-1.
+        row=self.row._replace(flux=model+self.row.flux_err)
+        numpy.testing.assert_allclose(photometric_logprob(self.params,row),-len(row.flux)/2,atol=1e-9)
+
     def test_custom_gradient_matches_jvp_gradient(self):
         custom = jax.grad(photometric_logprob)(self.params, self.row)
         reference = jax.jacfwd(lambda value: _raw_photometric_logprob(value, self.row))(

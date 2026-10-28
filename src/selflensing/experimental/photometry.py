@@ -76,7 +76,7 @@ def _raw_photometric_logprob(params, row):
         & (periapsis_phase <= DEFAULT_LIMITS["periapsis_phase"][1])
     )
     finite = bounds_ok & jnp.all(jnp.isfinite(model)) & jnp.all(jnp.isfinite(residual))
-    value = -jnp.sum(weights * residual**2)
+    value = -0.5 * jnp.sum(weights * residual**2)
     return jnp.where(finite, value, -jnp.inf)
 
 

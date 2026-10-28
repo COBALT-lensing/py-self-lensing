@@ -31,7 +31,7 @@ class ProfileBaselineTest(unittest.TestCase):
         model, _ = deterministic_models(times, times, parameter_row(params, 1.1, 1.2), 0.)
         error = jnp.linspace(.001, .002, 9)
         obs = model + .03 + jnp.linspace(-.001, .001, 9)
-        expected = profiled_lc_chi2(obs, error, model)
+        expected = 0.5 * profiled_lc_chi2(obs, error, model)
         shared = dict(Mcomp=1.1, Rcomp=1.2, tau_eff=None, peak_time=0.,
                       rv_times=times, observed_rv=None, observed_rv_err=None,
                       lc_times=times, observed_lc=obs, observed_lc_err=error,

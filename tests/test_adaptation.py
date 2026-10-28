@@ -65,3 +65,14 @@ class AdaptationTest(unittest.TestCase):
     def test_invalid_initialization_is_rejected(self):
         with self.assertRaisesRegex(ValueError, 'finite initial walker'):
             tune_proposals(lambda p: jnp.full(p.shape[:-1], -jnp.inf), np.zeros((1, 2, 1)), [1.])
+
+
+    def test_covariance_rebuild_preserves_accumulated_scale_tuning(self):
+        # Two narrow separated modes have a broad pooled covariance. A scale
+        # reset on every rebuild leaves acceptance close to zero indefinitely.
+        initial = np.tile(np.array([-5., 5.]), 8).reshape(1, 16, 1)
+        logprob = lambda p: -.5*jnp.sum(((jnp.abs(p)-5.)/.01)**2, axis=-1)
+        warmup = tune_proposals(logprob, initial, [1.], steps=10000,
+                                rounds=80, covariance=True)
+        self.assertGreater(warmup.acceptance[-10:].mean(), .1)
+        self.assertLess(float(warmup.transform[0, 0, 0]), .2)

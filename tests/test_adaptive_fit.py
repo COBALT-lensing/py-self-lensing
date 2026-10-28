@@ -15,6 +15,12 @@ from selflensing.fitting.blackjax import (
 
 class AdaptiveFitTest(unittest.TestCase):
     def test_single_and_batched_recover_synthetic_event(self):
+        self.check_event('inclination')
+
+    def test_impact_coordinates_recover_synthetic_event(self):
+        self.check_event('b_source')
+
+    def check_event(self, geometry):
         truth = np.array([1., 1.5707, 9., .2, .4])
         times = Time(2457000. + np.linspace(-.3, .3, 31), format='jd')
         system = SelfLensingSystem(a=truth[0]*units.au, i=truth[1]*units.rad,
@@ -26,16 +32,19 @@ class AdaptiveFitTest(unittest.TestCase):
         error = np.full(len(times), 1e-4)
         observed = flux + .02 + rng.normal(size=len(times))*error
         start = truth + rng.normal(size=(16, 5))*[.005, .00001, .05, .005, .005]
-        shared = dict(Mcomp=1*units.M_sun, Rcomp=1*units.R_sun,
+        if geometry == 'b_source':
+            from selflensing.fitting.geometry import physical_to_geometry
+            start = np.asarray(physical_to_geometry(start, 1.))
+        shared = dict(inclination_parameterization=geometry, Mcomp=1*units.M_sun, Rcomp=1*units.R_sun,
             nwalkers=16, nsteps=300, burn=100, warmup_steps=150,
-            proposal_scale=np.array([.005, .00003, .1, .01, .01]),
+            proposal_scale=np.array([.005, .006 if geometry == "b_source" else .00003, .1, .01, .01]),
             profile_lc_baseline=True, progress=False, prefer_gpu=False,
             return_sampler=True)
         fitted, sampler, _ = self_lensing_system_from_fit_blackjax(
             peak_time=times[15], lc_times=times,
             observed_lc=observed*units.dimensionless_unscaled,
             observed_lc_err=error*units.dimensionless_unscaled,
-            initial_walker_state=BlackJAXFitState(start), **shared)
+            initial_walker_state=BlackJAXFitState(start, inclination_parameterization=geometry), **shared)
         prediction = LightcurveGenerator(fitted, times=times, peak_time=times[15],
             lensing_method='IntegratedWittMaoJax').flux_array
         residual = observed - prediction
@@ -46,7 +55,7 @@ class AdaptiveFitTest(unittest.TestCase):
             peak_time=np.array([times[15].jd]), lc_times=times.jd[None, :],
             observed_lc=observed[None]*units.dimensionless_unscaled,
             observed_lc_err=error[None]*units.dimensionless_unscaled,
-            initial_walker_state=BlackJAXFitState(start[None]), **shared)
+            initial_walker_state=BlackJAXFitState(start[None], inclination_parameterization=geometry), **shared)
         prediction = LightcurveGenerator(systems[0], times=times, peak_time=times[15],
             lensing_method='IntegratedWittMaoJax').flux_array
         residual = observed - prediction

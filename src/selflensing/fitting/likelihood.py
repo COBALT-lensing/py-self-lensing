@@ -14,6 +14,9 @@ from ..models import SelfLensingSystem, DEFAULT_LIMITS
 from ._utils import _device_array, _extract_value, gauss_lnprior
 from .numeric import deterministic_models, parameter_row, physical_properties
 
+# Identifies the statistical target in new posterior exports.
+LIKELIHOOD_CONVENTION = "gaussian_chi2_half_v2"
+
 
 @quaxify
 def combined_chi2(
@@ -44,6 +47,10 @@ def combined_chi2(
     profile_lc_baseline=False,
 ):
     """Compute log-likelihood for self-lensing binary parameters.
+
+    Independent Gaussian observations contribute -chi_squared/2, with fixed
+    normalization constants omitted. GP log probabilities and explicit priors
+    are already logarithmic densities and are added without rescaling.
 
     Non-lensing orientations are allowed: self-lensing feasibility is not a
     prior. An explicit tau_eff prior still requires a finite lensing duration.
@@ -207,7 +214,7 @@ def combined_chi2(
                 rv_gen = RVGenerator(
                     new_model_sls, times=rv_times, peak_time=effective_peak_time
                 )
-                return profiled_rv_chi2(
+                return 0.5 * profiled_rv_chi2(
                     observed_rv.to(units.m / units.s).value,
                     observed_rv_err.to(units.m / units.s).value,
                     rv_gen.rv.to(units.m / units.s).value,
@@ -228,7 +235,7 @@ def combined_chi2(
                         model_lc = model_lc.value
                     if center_lc_model:
                         model_lc = model_lc - 1.0
-                    return (profiled_lc_chi2 if profile_lc_baseline else chi2_masked)(
+                    return 0.5 * (profiled_lc_chi2 if profile_lc_baseline else chi2_masked)(
                         observed_lc,
                         observed_lc_err,
                         model_lc,
@@ -309,6 +316,7 @@ def combined_chi2(
 
 
 def chi2(obs, obs_err, model):
+    """Negative chi squared, not a Gaussian log likelihood (multiply by 1/2)."""
     return -jnp.sum((obs - model) ** 2 / obs_err**2)
 
 
@@ -422,13 +430,13 @@ def numeric_combined_chi2(
     model_lc, model_rv = deterministic_models(lc_times, rv_times, model_params, peak_time)
     result = bounds
     if observed_rv is not None:
-        result = result + profiled_rv_chi2(
+        result = result + 0.5 * profiled_rv_chi2(
             observed_rv, observed_rv_err, model_rv, rv_mask, rv_source_ids
         )
     if observed_lc is not None:
         if center_lc_model:
             model_lc = model_lc - 1.0
-        result = result + (profiled_lc_chi2 if profile_lc_baseline else chi2_masked)(
+        result = result + 0.5 * (profiled_lc_chi2 if profile_lc_baseline else chi2_masked)(
             observed_lc, observed_lc_err, model_lc, lc_mask)
 
     if detected_periods.size > 0:

@@ -307,3 +307,38 @@ systems, samplers, walker_state = self_lensing_systems_from_batched_fit_blackjax
 All fitters respect the device controls described in the GPU section above:
 `prefer_gpu=True` by default, `device="gpu:0"` to select a specific device, and
 `prefer_gpu=False` to force CPU execution.
+
+
+## Fitting in impact-parameter coordinates
+
+The single and batched BlackJAX fitters accept
+`inclination_parameterization="b_source"` (default: `"inclination"`).
+`b_source` is the projected lens/source offset at the longitude-zero reference
+epoch, divided by the stellar radius. For eccentric orbits this reference
+quantity is not the minimum separation over the whole orbit.
+
+The exact eccentric-orbit transformation and its Jacobian preserve the current
+uniform-in-inclination prior and inclination bounds, including non-crossing
+systems. There is no extra restriction to `b_source <= 1`. The singular,
+measure-zero face-on boundary is rejected rather than producing an infinite
+log density. Other orbital coordinates, including the single fitter's period
+parameterization, can be used independently of this geometry option.
+
+Internally generated physical starting positions are converted automatically.
+For explicit starts, use `selflensing.fitting.geometry.physical_to_geometry`
+with physical `(a[AU], i[rad], Macc, e, periapsis_phase, ...)` positions and the
+stellar radius in solar units, then construct
+`BlackJAXFitState(coords, inclination_parameterization="b_source")`.
+If using period coordinates, replace the converted array's first column with
+periods and set the state's `parameterization="period"` as well.
+Resume states must match both coordinate choices; returned states retain them.
+
+Sampler names/units identify the sampled coordinates. `get_log_prob()` remains
+the actual sampling density, including Jacobians. Representative fitted
+systems are selected using density in the original physical `(a, i, ...)`
+coordinates, so changing coordinates alone does not redefine the quoted best
+physical fit. All returned systems still carry physical inclination values.
+
+See [RECOVERY.md](RECOVERY.md) for optional robust covariance warm-up and corrected recovery proposals, including their defaults and validation.
+
+See [MIXTURE.md](MIXTURE.md) for frozen local-covariance mixture sampling, exact pulse coordinates, original-prior Jacobians and the physical posterior adapter.
